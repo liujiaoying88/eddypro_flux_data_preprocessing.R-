@@ -1,17 +1,14 @@
 # =========================================
 # Prepare REddyProc Input Dataset (2016)
+# Site: MukaHead
 # Author: Cai Xiaoliang
-# =========================================
-
-# =========================================
-# 1. Load packages
 # =========================================
 
 library(tidyverse)
 library(lubridate)
 
 # =========================================
-# 2. Read cleaned dataset
+# 1. Read Level-1 analysis dataset
 # =========================================
 
 flux <- read_csv(
@@ -19,44 +16,33 @@ flux <- read_csv(
 )
 
 # =========================================
-# 3. Convert timestamp to datetime
+# 2. Create REddyProc input dataset
 # =========================================
 
-flux <- flux %>%
+flux_reddyproc <- flux %>%
   mutate(
-    datetime = ymd_hm(TIMESTAMP_START)
-  )
-
-# =========================================
-# 4. Replace invalid values with NA
-# =========================================
-
-flux <- flux %>%
+    DateTime = ymd_hm(TIMESTAMP_START) + minutes(30)
+  ) %>%
   mutate(
     across(
       c(FC, LE, H, USTAR, TA_EP, RH_EP, VPD_EP, SW_IN_POT),
       ~ ifelse(. < -9990, NA, .)
     )
-  )
-
-# =========================================
-# 5. Create REddyProc input dataset
-# =========================================
-
-flux_reddyproc <- flux %>%
+  ) %>%
+  mutate(
+    FC = ifelse(FC < -50 | FC > 50, NA, FC)
+  ) %>%
   transmute(
-    Year  = year(datetime),
-    DoY   = yday(datetime),
-    Hour  = hour(datetime) + minute(datetime) / 60,
-    NEE   = FC,
-    Rg    = SW_IN_POT,
-    Tair  = TA_EP,
-    VPD   = VPD_EP,
+    DateTime = DateTime,
+    NEE = FC,
+    Rg = SW_IN_POT,
+    Tair = TA_EP,
+    VPD = VPD_EP,
     Ustar = USTAR
   )
 
 # =========================================
-# 6. Check REddyProc input dataset
+# 3. Check REddyProc input dataset
 # =========================================
 
 glimpse(flux_reddyproc)
@@ -66,16 +52,12 @@ summary(flux_reddyproc)
 head(flux_reddyproc)
 
 # =========================================
-# 7. Save REddyProc input file
+# 4. Save REddyProc input file
 # =========================================
 
 write_csv(
   flux_reddyproc,
   "output/reddyproc_input_2016.csv"
 )
-
-# =========================================
-# 8. Finished
-# =========================================
 
 print("REddyProc input dataset created successfully.")

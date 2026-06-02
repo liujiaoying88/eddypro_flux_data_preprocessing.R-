@@ -10,7 +10,7 @@ library(lubridate)
 # =========================
 
 flux <- read_csv(
-    "output/analysis_2016.csv"
+    "/Users/caixiaoliang/Documents/analysis_2016.csv"
 )
 
 # =========================
@@ -50,5 +50,5 @@ flux <- flux %>%
 
 write_csv(
     flux,
-    "output/analysis_2016_datetime.csv"
+    "/Users/caixiaoliang/Documents/analysis_2016_datetime.csv"
 )

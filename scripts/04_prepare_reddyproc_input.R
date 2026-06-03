@@ -1,5 +1,5 @@
 # =========================================
-# Prepare REddyProc Input Dataset (2016)
+# 04 Prepare REddyProc Input Dataset (2016)
 # Site: MukaHead
 # Author: Cai Xiaoliang
 # =========================================
@@ -7,33 +7,31 @@
 library(tidyverse)
 library(lubridate)
 
+analysis_year <- 2016
+
 # =========================================
-# 1. Read Level-1 analysis dataset
+# 1. Read QC-cleaned dataset
 # =========================================
 
 flux <- read_csv(
-  "data/analysis_2016.csv"
+  paste0("/Users/caixiaoliang/Documents/analysis_", analysis_year, "_qc.csv")
 )
 
 # =========================================
-# 2. Create REddyProc input dataset
+# 2. Create REddyProc standard input dataset
 # =========================================
 
 flux_reddyproc <- flux %>%
   mutate(
-    DateTime = ymd_hm(TIMESTAMP_START) + minutes(30)
-  ) %>%
-  mutate(
-    across(
-      c(FC, LE, H, USTAR, TA_EP, RH_EP, VPD_EP, SW_IN_POT),
-      ~ ifelse(. < -9990, NA, .)
-    )
-  ) %>%
-  mutate(
-    FC = ifelse(FC < -50 | FC > 50, NA, FC)
+    DateTime = ymd_hm(TIMESTAMP_START),
+    Year = year(DateTime),
+    DoY = yday(DateTime),
+    Hour = hour(DateTime) + minute(DateTime) / 60
   ) %>%
   transmute(
-    DateTime = DateTime,
+    Year = Year,
+    DoY = DoY,
+    Hour = Hour,
     NEE = FC,
     Rg = SW_IN_POT,
     Tair = TA_EP,
@@ -46,9 +44,7 @@ flux_reddyproc <- flux %>%
 # =========================================
 
 glimpse(flux_reddyproc)
-
 summary(flux_reddyproc)
-
 head(flux_reddyproc)
 
 # =========================================
@@ -57,7 +53,7 @@ head(flux_reddyproc)
 
 write_csv(
   flux_reddyproc,
-  "output/reddyproc_input_2016.csv"
+  paste0("/Users/caixiaoliang/Documents/reddyproc_input_", analysis_year, ".csv")
 )
 
 print("REddyProc input dataset created successfully.")

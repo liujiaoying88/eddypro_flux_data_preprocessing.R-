@@ -67,7 +67,7 @@ summary(daily_model)
 
 write_csv(
   daily_flux,
-  "output/daily_flux_for_modeling_2016.csv"
+  "/Users/caixiaoliang/Documents/daily_flux_for_modeling_2016.csv"
 )
 
 # =========================================

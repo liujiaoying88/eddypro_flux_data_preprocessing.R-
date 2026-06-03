@@ -1,4 +1,3 @@
-```r
 # =========================================
 # Flux Partitioning and Environmental Response Analysis (2016)
 # Site: MukaHead

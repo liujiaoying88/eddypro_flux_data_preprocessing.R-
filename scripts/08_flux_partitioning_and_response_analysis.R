@@ -1,3 +1,18 @@
+EProc <- sEddyProc$new(
+  'MukaHead',
+  flux_reddyproc,
+  c('NEE', 'Rg', 'Tair', 'VPD', 'Ustar')
+)
+
+EProc$sSetLocationInfo(
+  LatDeg = 5.47,
+  LongDeg = 100.20,
+  TimeZoneHour = 8
+)
+
+EProc$sEstimateUstarScenarios()
+EProc$sMDSGapFillUStarScens('NEE')
+EProc$sMRFluxPartitionUStarScens()
 # =========================================
 # Flux Partitioning and Environmental Response Analysis (2016)
 # Site: MukaHead

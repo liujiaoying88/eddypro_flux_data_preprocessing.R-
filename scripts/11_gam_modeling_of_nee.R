@@ -41,7 +41,7 @@ plot(
 # =========================================
 
 png(
-  "figures/GAM_Response_Curves_2016.png",
+  "/Users/caixiaoliang/Documents/GAM_Response_Curves_2016.png",
   width = 3000,
   height = 2000,
   res = 300

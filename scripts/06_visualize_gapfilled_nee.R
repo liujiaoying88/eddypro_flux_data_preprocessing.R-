@@ -12,7 +12,7 @@ library(lubridate)
 # =========================================
 
 filled <- read_csv(
-  "output/reddyproc_filled_2016.csv"
+  "/Users/caixiaoliang/Documents/reddyproc_filled_2016.csv"
 )
 
 # =========================================

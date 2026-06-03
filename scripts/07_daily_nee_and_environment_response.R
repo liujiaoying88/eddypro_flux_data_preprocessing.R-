@@ -12,7 +12,7 @@ library(lubridate)
 # =========================================
 
 filled <- read_csv(
-  "output/reddyproc_filled_2016.csv"
+  "/Users/caixiaoliang/Documents/reddyproc_filled_2016.csv"
 )
 
 # =========================================
@@ -53,7 +53,7 @@ ggplot(filled_daily, aes(x = date, y = NEE_daily)) +
   )
 
 ggsave(
-  "figures/Daily_Gap_filled_NEE_2016.png",
+  "/Users/caixiaoliang/Documents/Daily_Gap_filled_NEE_2016.png",
   width = 12,
   height = 6,
   dpi = 300
@@ -73,7 +73,7 @@ ggplot(filled, aes(x = VPD_f, y = NEE_uStar_f)) +
   )
 
 ggsave(
-  "figures/NEE_vs_VPD_2016.png",
+  "/Users/caixiaoliang/Documents/NEE_vs_VPD_2016.png",
   width = 10,
   height = 6,
   dpi = 300
@@ -93,7 +93,7 @@ ggplot(filled, aes(x = Tair_f, y = NEE_uStar_f)) +
   )
 
 ggsave(
-  "figures/NEE_vs_Tair_2016.png",
+  "/Users/caixiaoliang/Documents/NEE_vs_Tair_2016.png",
   width = 10,
   height = 6,
   dpi = 300
@@ -105,7 +105,7 @@ ggsave(
 
 write_csv(
   filled_daily,
-  "output/daily_gapfilled_NEE_2016.csv"
+  "/Users/caixiaoliang/Documents/daily_gapfilled_NEE_2016.csv"
 )
 
 # =========================================

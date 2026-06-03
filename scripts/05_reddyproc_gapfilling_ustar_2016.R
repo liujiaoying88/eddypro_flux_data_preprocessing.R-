@@ -1,187 +1,127 @@
 # =========================================
-
-# REddyProc Workflow for 2016
-
+# 05 REddyProc Gap-filling and uStar Workflow
 # Site: MukaHead
-
+# Author: Cai Xiaoliang
 # =========================================
-
-
 
 library(tidyverse)
-
 library(lubridate)
-
 library(REddyProc)
 
-
-
-# =========================================
-
-# 1. Read Level-1 analysis dataset
+analysis_year <- 2016
 
 # =========================================
+# 1. Read REddyProc input dataset
+# =========================================
 
-
-
-flux <- read_csv(
-
-  "/Users/caixiaoliang/Documents/analysis_2016.csv"
-
+flux_reddyproc <- read_csv(
+  paste0("/Users/caixiaoliang/Documents/reddyproc_input_", analysis_year, ".csv")
 )
 
-
-
+# =========================================
+# 2. Reconstruct DateTime column
 # =========================================
 
-# 2. Create REddyProc input dataset
-
-# =========================================
-
-
-
-flux_reddyproc <- flux %>%
-
+flux_reddyproc <- flux_reddyproc %>%
   mutate(
-
-    DateTime = ymd_hm(TIMESTAMP_START) + minutes(30)
-
+    DateTime = as.POSIXct(
+      as.Date(paste0(Year, "-01-01")) + days(DoY - 1),
+      tz = "Asia/Kuala_Lumpur"
+    ) + minutes(Hour * 60)
   ) %>%
-
-  mutate(
-
-    across(
-
-      c(FC, LE, H, USTAR, TA_EP, RH_EP, VPD_EP, SW_IN_POT),
-
-      ~ ifelse(. < -9990, NA, .)
-
-    )
-
-  ) %>%
-
-  mutate(
-
-    FC = ifelse(FC < -50 | FC > 50, NA, FC)
-
-  ) %>%
-
-  transmute(
-
-    DateTime = DateTime,
-
-    NEE = FC,
-
-    Rg = SW_IN_POT,
-
-    Tair = TA_EP,
-
-    VPD = VPD_EP,
-
-    Ustar = USTAR
-
+  select(
+    DateTime,
+    Year,
+    DoY,
+    Hour,
+    NEE,
+    Rg,
+    Tair,
+    VPD,
+    Ustar
   )
 
-
+# =========================================
+# 3. Check input dataset
+# =========================================
 
 glimpse(flux_reddyproc)
-
 summary(flux_reddyproc)
 
+cat("\n===== DateTime range =====\n")
+print(range(flux_reddyproc$DateTime, na.rm = TRUE))
 
+cat("\n===== Duplicated DateTime =====\n")
+print(sum(duplicated(flux_reddyproc$DateTime)))
 
 # =========================================
-
-# 3. Create REddyProc object
-
+# 4. Create REddyProc object
 # =========================================
-
-
 
 EProc <- sEddyProc$new(
-
   'MukaHead',
-
   flux_reddyproc,
-
-  c('NEE', 'Rg', 'Tair', 'VPD', 'Ustar')
-
+  c('NEE', 'Rg', 'Tair', 'VPD', 'Ustar'),
+  ColPOSIXTime = 'DateTime',
+  DTS = 48
 )
 
-
-
+# =========================================
+# 5. Set site location information
+# Muka Head, Penang, Malaysia
 # =========================================
 
-# 4. Estimate u* threshold
+EProc$sSetLocationInfo(
+  LatDeg = 5.47,
+  LongDeg = 100.20,
+  TimeZoneHour = 8
+)
 
 # =========================================
-
-
+# 6. Estimate u* threshold
+# =========================================
 
 EProc$sEstimateUstarScenarios()
 
-
-
 ustar_result <- EProc$sGetEstimatedUstarThresholdDistribution()
 
-
-
 write_csv(
-
   ustar_result,
-
-  "/Users/caixiaoliang/Documents/ustar_threshold_2016.csv"
-
+  paste0("/Users/caixiaoliang/Documents/ustar_threshold_", analysis_year, ".csv")
 )
 
-
-
 # =========================================
-
-# 5. Gap filling
-
+# 7. Gap filling
 # =========================================
-
-
 
 EProc$sMDSGapFillUStarScens('NEE')
-
 EProc$sMDSGapFill('Tair')
-
 EProc$sMDSGapFill('VPD')
-
 EProc$sMDSGapFill('Rg')
 
-
-
 # =========================================
-
-# 6. Export REddyProc results
-
+# 8. Export REddyProc results
 # =========================================
-
-
 
 filled_data <- EProc$sExportResults()
 
-
-
 write_csv(
-
   filled_data,
-
-  "/Users/caixiaoliang/Documents/reddyproc_filled_2016.csv"
-
+  paste0("/Users/caixiaoliang/Documents/reddyproc_filled_", analysis_year, ".csv")
 )
 
-
-
+# =========================================
+# 9. Check exported variables
 # =========================================
 
-# 7. Finished
+cat("\n===== Exported variables =====\n")
+print(names(filled_data))
 
-# =========================================
-
-
-
-print("REddyProc workflow for 2016 completed successfully.")
+cat("\n===== REddyProc workflow completed successfully =====\n")
+cat(
+  paste0(
+    "Saved file: /Users/caixiaoliang/Documents/reddyproc_filled_",
+    analysis_year,
+    ".csv\n"
+  )
+)

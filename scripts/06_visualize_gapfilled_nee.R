@@ -43,7 +43,7 @@ ggplot(filled, aes(x = DateTime, y = NEE_uStar_f)) +
 # =========================================
 
 ggsave(
-  "figures/Gap_filled_NEE_2016.png",
+  "/Users/caixiaoliang/Documents/Gap_filled_NEE_2016.png",
   width = 12,
   height = 6,
   dpi = 300

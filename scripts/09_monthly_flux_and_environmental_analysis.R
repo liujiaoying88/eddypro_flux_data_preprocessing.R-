@@ -58,7 +58,7 @@ ggplot(monthly_flux,
   )
 
 ggsave(
-  "figures/Monthly_Mean_NEE_2016.png",
+  "/Users/caixiaoliang/Documents/Monthly_Mean_NEE_2016.png",
   width = 10,
   height = 6,
   dpi = 300
@@ -92,7 +92,7 @@ ggplot(monthly_long,
   )
 
 ggsave(
-  "figures/Monthly_Environmental_Drivers_2016.png",
+  "/Users/caixiaoliang/Documents/Monthly_Environmental_Drivers_2016.png",
   width = 10,
   height = 6,
   dpi = 300
@@ -135,7 +135,7 @@ ggplot(monthly_scaled,
   )
 
 ggsave(
-  "figures/Scaled_Environmental_Drivers_2016.png",
+  "/Users/caixiaoliang/Documents/Scaled_Environmental_Drivers_2016.png",
   width = 10,
   height = 6,
   dpi = 300
@@ -166,7 +166,7 @@ print(cor_matrix)
 
 write_csv(
   monthly_flux,
-  "output/monthly_flux_2016.csv"
+  "/Users/caixiaoliang/Documents/monthly_flux_2016.csv"
 )
 
 # =========================================

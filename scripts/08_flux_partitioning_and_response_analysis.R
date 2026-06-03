@@ -14,7 +14,7 @@ library(REddyProc)
 # =========================================
 
 filled <- read_csv(
-  "output/reddyproc_filled_2016.csv"
+  "/Users/caixiaoliang/Documents/reddyproc_filled_2016.csv"
 )
 
 # =========================================
@@ -42,7 +42,7 @@ ggplot(filled, aes(x = VPD_f, y = NEE_uStar_f)) +
   )
 
 ggsave(
-  "figures/Smoothed_VPD_Response_2016.png",
+  "/Users/caixiaoliang/Documents/Smoothed_VPD_Response_2016.png",
   width = 10,
   height = 6,
   dpi = 300
@@ -75,7 +75,7 @@ ggplot(day_flux_clean, aes(x = VPD_f, y = NEE_uStar_f)) +
   )
 
 ggsave(
-  "figures/Clean_Daytime_VPD_Response_2016.png",
+  "/Users/caixiaoliang/Documents/Clean_Daytime_VPD_Response_2016.png",
   width = 10,
   height = 6,
   dpi = 300
@@ -103,7 +103,7 @@ ggplot(light_flux, aes(x = Rg_f, y = NEE_uStar_f)) +
   )
 
 ggsave(
-  "figures/Light_Response_NEE_2016.png",
+  "/Users/caixiaoliang/Documents/Light_Response_NEE_2016.png",
   width = 10,
   height = 6,
   dpi = 300
@@ -123,7 +123,7 @@ partitioned_data <- EProc$sExportResults()
 
 write_csv(
   partitioned_data,
-  "output/reddyproc_partitioned_2016.csv"
+  "/Users/caixiaoliang/Documents/reddyproc_partitioned_2016.csv"
 )
 
 # =========================================
@@ -154,7 +154,7 @@ ggplot(nee_light, aes(x = Rg_f, y = NEE_U50_f)) +
   )
 
 ggsave(
-  "figures/Light_Response_NEE_U50_2016.png",
+  "/Users/caixiaoliang/Documents/Light_Response_NEE_U50_2016.png",
   width = 10,
   height = 6,
   dpi = 300

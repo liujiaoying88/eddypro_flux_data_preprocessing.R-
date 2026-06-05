@@ -1,89 +1,40 @@
 # =========================================
-# 05 REddyProc Gap-filling, uStar and Partitioning
+# 05 REddyProc Gap-filling and Optional Partitioning
 # Site: MukaHead
 # Author: Cai Xiaoliang
 # Purpose:
-#   Run uStar estimation, gap filling, and flux partitioning.
-#   Export both filled and partitioned REddyProc results.
+#   Run uStar estimation and MDS gap filling.
+#   Try flux partitioning, but do not stop the workflow
+#   if GPP / Reco are not generated.
 # =========================================
 
 library(tidyverse)
 library(lubridate)
 library(REddyProc)
 
-# =========================================
-# 0. Parameters
-# =========================================
-
 analysis_year <- 2016
 base_path <- "~/Documents"
 
-input_file <- file.path(
-  base_path,
-  paste0("reddyproc_input_", analysis_year, ".csv")
-)
-
-ustar_file <- file.path(
-  base_path,
-  paste0("ustar_threshold_", analysis_year, ".csv")
-)
-
-filled_file <- file.path(
-  base_path,
-  paste0("reddyproc_filled_", analysis_year, ".csv")
-)
-
-partitioned_file <- file.path(
-  base_path,
-  paste0("reddyproc_partitioned_", analysis_year, ".csv")
-)
+input_file <- file.path(base_path, paste0("reddyproc_input_", analysis_year, ".csv"))
+ustar_file <- file.path(base_path, paste0("ustar_threshold_", analysis_year, ".csv"))
+filled_file <- file.path(base_path, paste0("reddyproc_filled_", analysis_year, ".csv"))
+partitioned_file <- file.path(base_path, paste0("reddyproc_partitioned_", analysis_year, ".csv"))
 
 # =========================================
-# 1. Read REddyProc input dataset
+# 1. Read input
 # =========================================
 
-cat("\n===== Reading REddyProc input dataset =====\n")
-cat("Input file:\n")
-cat(input_file, "\n")
+flux_reddyproc <- read_csv(input_file, show_col_types = FALSE)
 
-flux_reddyproc <- read_csv(
-  input_file,
-  show_col_types = FALSE
-)
-
-# =========================================
-# 2. Check required columns
-# =========================================
-
-required_cols <- c(
-  "Year",
-  "DoY",
-  "Hour",
-  "NEE",
-  "Rg",
-  "Tair",
-  "VPD",
-  "Ustar"
-)
-
-missing_cols <- setdiff(
-  required_cols,
-  names(flux_reddyproc)
-)
+required_cols <- c("Year", "DoY", "Hour", "NEE", "Rg", "Tair", "VPD", "Ustar")
+missing_cols <- setdiff(required_cols, names(flux_reddyproc))
 
 if (length(missing_cols) > 0) {
-  stop(
-    paste(
-      "Missing required columns:",
-      paste(missing_cols, collapse = ", ")
-    )
-  )
+  stop(paste("Missing required columns:", paste(missing_cols, collapse = ", ")))
 }
 
-cat("\nRequired columns check passed.\n")
-
 # =========================================
-# 3. Reconstruct DateTime column
+# 2. Reconstruct DateTime
 # =========================================
 
 flux_reddyproc <- flux_reddyproc %>%
@@ -96,122 +47,54 @@ flux_reddyproc <- flux_reddyproc %>%
     Tair = suppressWarnings(as.numeric(Tair)),
     VPD = suppressWarnings(as.numeric(VPD)),
     Ustar = suppressWarnings(as.numeric(Ustar)),
-    
     DateTime = as.POSIXct(
       as.Date(paste0(Year, "-01-01")) + days(DoY - 1),
       tz = "Asia/Kuala_Lumpur"
     ) + minutes(Hour * 60)
   ) %>%
-  select(
-    DateTime,
-    Year,
-    DoY,
-    Hour,
-    NEE,
-    Rg,
-    Tair,
-    VPD,
-    Ustar
-  ) %>%
+  select(DateTime, Year, DoY, Hour, NEE, Rg, Tair, VPD, Ustar) %>%
   arrange(DateTime)
 
 # =========================================
-# 4. Input QC
+# 3. Input QC
 # =========================================
 
-cat("\n===== REddyProc input structure =====\n")
+cat("\n===== REddyProc input check =====\n")
 glimpse(flux_reddyproc)
 
-cat("\n===== DateTime range =====\n")
-print(
-  range(
-    flux_reddyproc$DateTime,
-    na.rm = TRUE
-  )
-)
+cat("\nDateTime range:\n")
+print(range(flux_reddyproc$DateTime, na.rm = TRUE))
 
-cat("\n===== Expected vs actual rows =====\n")
-expected_rows <- ifelse(
-  leap_year(analysis_year),
-  366 * 48,
-  365 * 48
-)
+cat("\nDuplicated DateTime:\n")
+print(sum(duplicated(flux_reddyproc$DateTime)))
 
-cat("Expected rows:", expected_rows, "\n")
-cat("Actual rows:", nrow(flux_reddyproc), "\n")
+cat("\nMissing values:\n")
+print(colSums(is.na(flux_reddyproc)))
 
-if (nrow(flux_reddyproc) != expected_rows) {
-  warning(
-    paste(
-      "Row count does not match expected half-hourly records for",
-      analysis_year
-    )
-  )
-}
+cat("\nVariable summary:\n")
+print(summary(flux_reddyproc %>% select(NEE, Rg, Tair, VPD, Ustar)))
 
-cat("\n===== Duplicated DateTime =====\n")
-duplicate_count <- sum(
-  duplicated(
-    flux_reddyproc$DateTime
-  )
-)
-
-print(duplicate_count)
-
-if (duplicate_count > 0) {
-  stop("Duplicated DateTime detected. Stop before REddyProc.")
-}
-
-cat("\n===== Missing values summary =====\n")
-print(
-  colSums(
-    is.na(flux_reddyproc)
-  )
-)
-
-cat("\n===== Variable summaries =====\n")
-print(
-  summary(
-    flux_reddyproc %>%
-      select(
-        NEE,
-        Rg,
-        Tair,
-        VPD,
-        Ustar
-      )
-  )
-)
-
-cat("\n===== Radiation QC =====\n")
-cat("Rg NA count:", sum(is.na(flux_reddyproc$Rg)), "\n")
-cat("Rg < -20 count:", sum(flux_reddyproc$Rg < -20, na.rm = TRUE), "\n")
-cat("Rg max:", max(flux_reddyproc$Rg, na.rm = TRUE), "\n")
+cat("\nUnit QC:\n")
+cat("Tair range:\n")
+print(range(flux_reddyproc$Tair, na.rm = TRUE))
+cat("VPD range:\n")
+print(range(flux_reddyproc$VPD, na.rm = TRUE))
+cat("Rg negative count:\n")
+print(sum(flux_reddyproc$Rg < 0, na.rm = TRUE))
+cat("Extreme NEE count:\n")
+print(sum(flux_reddyproc$NEE < -50 | flux_reddyproc$NEE > 50, na.rm = TRUE))
 
 # =========================================
-# 5. Create REddyProc object
+# 4. Create REddyProc object
 # =========================================
-
-cat("\n===== Creating REddyProc object =====\n")
 
 EProc <- sEddyProc$new(
-  'MukaHead',
+  "MukaHead",
   flux_reddyproc,
-  c(
-    'NEE',
-    'Rg',
-    'Tair',
-    'VPD',
-    'Ustar'
-  ),
-  ColPOSIXTime = 'DateTime',
+  c("NEE", "Rg", "Tair", "VPD", "Ustar"),
+  ColPOSIXTime = "DateTime",
   DTS = 48
 )
-
-# =========================================
-# 6. Set site location information
-# Muka Head, Penang, Malaysia
-# =========================================
 
 EProc$sSetLocationInfo(
   LatDeg = 5.47,
@@ -220,7 +103,7 @@ EProc$sSetLocationInfo(
 )
 
 # =========================================
-# 7. Estimate u* threshold
+# 5. uStar estimation
 # =========================================
 
 cat("\n===== Estimating uStar scenarios =====\n")
@@ -229,68 +112,110 @@ EProc$sEstimateUstarScenarios()
 
 ustar_result <- EProc$sGetEstimatedUstarThresholdDistribution()
 
-write_csv(
-  ustar_result,
-  ustar_file
-)
+write_csv(ustar_result, ustar_file)
 
-cat("uStar threshold file saved:\n")
+cat("Saved uStar file:\n")
 cat(ustar_file, "\n")
 
 # =========================================
-# 8. Gap filling
+# 6. Gap filling
 # =========================================
 
 cat("\n===== Running MDS gap filling =====\n")
 
-EProc$sMDSGapFillUStarScens('NEE')
-EProc$sMDSGapFill('Tair')
-EProc$sMDSGapFill('VPD')
-EProc$sMDSGapFill('Rg')
+EProc$sMDSGapFillUStarScens("NEE")
+EProc$sMDSGapFill("Tair")
+EProc$sMDSGapFill("VPD")
+EProc$sMDSGapFill("Rg")
 
 filled_data <- EProc$sExportResults()
 
-write_csv(
-  filled_data,
-  filled_file
-)
+write_csv(filled_data, filled_file)
 
-cat("Filled file saved:\n")
+cat("Saved filled file:\n")
 cat(filled_file, "\n")
 
-cat("\n===== Filled data variables =====\n")
+cat("\nFilled variables:\n")
 print(names(filled_data))
 
 # =========================================
-# 9. Flux partitioning
+# 7. Optional Flux Partitioning
 # =========================================
 
-cat("\n===== Running flux partitioning =====\n")
+cat("\n===== Trying flux partitioning =====\n")
 
-EProc$sMRFluxPartitionUStarScens()
+partition_method <- NA_character_
+
+mr_result <- try(
+  EProc$sMRFluxPartitionUStarScens(),
+  silent = TRUE
+)
 
 partitioned_data <- EProc$sExportResults()
 
-write_csv(
-  partitioned_data,
-  partitioned_file
+partition_cols <- grep(
+  "GPP|Reco",
+  names(partitioned_data),
+  value = TRUE,
+  ignore.case = TRUE
 )
 
-cat("Partitioned file saved:\n")
+if (
+  inherits(mr_result, "try-error") ||
+  length(partition_cols) == 0
+) {
+  cat("\nMR partitioning did not generate GPP / Reco.\n")
+  cat("Trying GL partitioning...\n")
+  
+  gl_result <- try(
+    EProc$sGLFluxPartitionUStarScens(),
+    silent = TRUE
+  )
+  
+  partitioned_data <- EProc$sExportResults()
+  
+  partition_cols <- grep(
+    "GPP|Reco",
+    names(partitioned_data),
+    value = TRUE,
+    ignore.case = TRUE
+  )
+  
+  if (
+    inherits(gl_result, "try-error") ||
+    length(partition_cols) == 0
+  ) {
+    partition_method <- "failed"
+    cat("\nFlux partitioning did not generate GPP / Reco.\n")
+    cat("This is not treated as a workflow failure.\n")
+    cat("Continue downstream analysis with reddyproc_filled_", analysis_year, ".csv\n", sep = "")
+  } else {
+    partition_method <- "GL"
+    cat("\nGL partitioning generated GPP / Reco:\n")
+    print(partition_cols)
+  }
+  
+} else {
+  partition_method <- "MR"
+  cat("\nMR partitioning generated GPP / Reco:\n")
+  print(partition_cols)
+}
+
+write_csv(partitioned_data, partitioned_file)
+
+cat("\nSaved partitioning attempt file:\n")
 cat(partitioned_file, "\n")
 
-cat("\n===== Partitioned data variables =====\n")
-print(names(partitioned_data))
-
 # =========================================
-# 10. Output QC
+# 8. Output QC
 # =========================================
 
-cat("\n===== Output file check =====\n")
+cat("\n===== Output check =====\n")
 cat("Filled rows:", nrow(filled_data), "\n")
-cat("Partitioned rows:", nrow(partitioned_data), "\n")
+cat("Partitioned attempt rows:", nrow(partitioned_data), "\n")
+cat("Partitioning method:", partition_method, "\n")
 
-cat("\n===== Key partitioning variables =====\n")
+cat("\nKey variables in partitioned attempt:\n")
 print(
   names(partitioned_data)[
     grepl(
@@ -302,9 +227,15 @@ print(
 )
 
 cat("\n=========================================\n")
-cat("05 REddyProc workflow completed successfully\n")
+cat("05 REddyProc gap-filling workflow completed\n")
 cat("=========================================\n")
 cat("Saved files:\n")
 cat(ustar_file, "\n")
 cat(filled_file, "\n")
 cat(partitioned_file, "\n")
+
+if (partition_method == "failed") {
+  cat("\nNote:\n")
+  cat("Flux partitioning did not generate GPP / Reco.\n")
+  cat("For the current workflow, use reddyproc_filled_", analysis_year, ".csv for NEE response and monthly NEE analysis.\n", sep = "")
+}

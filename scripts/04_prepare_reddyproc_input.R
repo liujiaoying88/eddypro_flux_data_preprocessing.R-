@@ -77,23 +77,23 @@ flux_core <- flux %>%
     Year = as.integer(Year),
     DoY = as.integer(DoY),
     Hour = as.numeric(Hour),
-    
+
     NEE = suppressWarnings(
       as.numeric(FC)
     ),
-    
+
     Rg = suppressWarnings(
       as.numeric(Rg)
     ),
-    
+
     Tair = suppressWarnings(
       as.numeric(TA_EP)
     ),
-    
+
     VPD = suppressWarnings(
       as.numeric(VPD_EP)
     ),
-    
+
     Ustar = suppressWarnings(
       as.numeric(USTAR)
     )
@@ -109,7 +109,7 @@ flux_core <- flux %>%
       Tair - 273.15,
       Tair
     ),
-    
+
     # EddyPro VPD is often Pa.
     # REddyProc expects hPa.
     VPD = ifelse(
@@ -117,7 +117,15 @@ flux_core <- flux %>%
       VPD / 100,
       VPD
     ),
-    
+
+    # Remove physically unreasonable VPD values.
+    # Values above 60 hPa are treated as invalid for this site-level workflow.
+    VPD = ifelse(
+      VPD > 60,
+      NA,
+      VPD
+    ),
+
     # Very small negative nighttime radiation values
     # are physically treated as zero for REddyProc.
     Rg = ifelse(
@@ -125,7 +133,7 @@ flux_core <- flux %>%
       0,
       Rg
     ),
-    
+
     # Basic missing-value safeguard
     across(
       c(
@@ -197,35 +205,19 @@ cat("\n===== REddyProc input check =====\n")
 glimpse(flux_reddyproc)
 
 cat("\nRows:\n")
-print(
-  nrow(flux_reddyproc)
-)
+print(nrow(flux_reddyproc))
 
 cat("\nExpected rows:\n")
-print(
-  n_days * 48
-)
+print(n_days * 48)
 
 cat("\nYear table:\n")
-print(
-  table(flux_reddyproc$Year)
-)
+print(table(flux_reddyproc$Year))
 
 cat("\nDoY range:\n")
-print(
-  range(
-    flux_reddyproc$DoY,
-    na.rm = TRUE
-  )
-)
+print(range(flux_reddyproc$DoY, na.rm = TRUE))
 
 cat("\nHour range:\n")
-print(
-  range(
-    flux_reddyproc$Hour,
-    na.rm = TRUE
-  )
-)
+print(range(flux_reddyproc$Hour, na.rm = TRUE))
 
 cat("\nDuplicated Year-DoY-Hour:\n")
 print(
@@ -256,6 +248,7 @@ print(
 )
 
 cat("\nUnit QC:\n")
+
 cat("Tair range should be Celsius:\n")
 print(
   range(
@@ -264,10 +257,18 @@ print(
   )
 )
 
-cat("VPD range should be hPa:\n")
+cat("VPD range should be hPa and <= 60:\n")
 print(
   range(
     flux_reddyproc$VPD,
+    na.rm = TRUE
+  )
+)
+
+cat("VPD > 60 count should be 0:\n")
+print(
+  sum(
+    flux_reddyproc$VPD > 60,
     na.rm = TRUE
   )
 )

@@ -1,112 +1,461 @@
 # =========================================
-# Monthly Flux and Environmental Analysis (2016)
+# 09 Monthly Flux, Carbon Budget and Environmental Analysis
 # Site: MukaHead
 # Author: Cai Xiaoliang
+# Purpose:
+#   Monthly and annual analysis of NEE, GPP, Reco and environmental drivers
+#   based on REddyProc partitioned output.
+#
+# Core rule:
+#   09 reads partitioned_with_datetime_YEAR.csv if available.
+#   Otherwise it reads reddyproc_partitioned_YEAR.csv and reconstructs DateTime.
 # =========================================
 
 library(tidyverse)
 library(lubridate)
 
 # =========================================
-# 1. Reconstruct datetime sequence
+# 0. Parameters
 # =========================================
 
-partitioned_data <- partitioned_data %>%
-  mutate(
-    DateTime = ymd_hm("201601010030") +
-      minutes(30) * (row_number() - 1)
-  )
+analysis_year <- 2016
+base_path <- "~/Documents"
 
-# =========================================
-# 2. Calculate monthly mean variables
-# =========================================
+partitioned_datetime_file <- file.path(
+  base_path,
+  paste0("partitioned_with_datetime_", analysis_year, ".csv")
+)
 
-monthly_flux <- partitioned_data %>%
-  mutate(
-    Month = month(DateTime, label = TRUE)
-  ) %>%
-  group_by(Month) %>%
-  summarise(
-    Monthly_NEE   = mean(NEE_U50_f, na.rm = TRUE),
-    Monthly_Rg    = mean(Rg_f, na.rm = TRUE),
-    Monthly_Tair  = mean(Tair_f, na.rm = TRUE),
-    Monthly_VPD   = mean(VPD_f, na.rm = TRUE),
-    .groups = "drop"
-  )
+partitioned_file <- file.path(
+  base_path,
+  paste0("reddyproc_partitioned_", analysis_year, ".csv")
+)
 
-# =========================================
-# 3. View monthly dataset
-# =========================================
+monthly_output_file <- file.path(
+  base_path,
+  paste0("monthly_flux_", analysis_year, ".csv")
+)
 
-monthly_flux
+annual_output_file <- file.path(
+  base_path,
+  paste0("annual_carbon_summary_", analysis_year, ".csv")
+)
 
-# =========================================
-# 4. Plot monthly mean NEE
-# =========================================
+correlation_output_file <- file.path(
+  base_path,
+  paste0("monthly_correlation_", analysis_year, ".csv")
+)
 
-ggplot(monthly_flux,
-       aes(x = Month,
-           y = Monthly_NEE,
-           group = 1)) +
-  geom_line(color = "blue", linewidth = 1.2) +
-  geom_point(size = 3, color = "red") +
-  theme_minimal() +
-  labs(
-    title = "Monthly Mean NEE",
-    x = "Month",
-    y = "Monthly NEE"
-  )
-
-ggsave(
-  "/Users/caixiaoliang/Documents/Monthly_Mean_NEE_2016.png",
-  width = 10,
-  height = 6,
-  dpi = 300
+spearman_output_file <- file.path(
+  base_path,
+  paste0("monthly_spearman_correlation_", analysis_year, ".csv")
 )
 
 # =========================================
-# 5. Monthly environmental drivers
+# 1. Read partitioned data
 # =========================================
 
-monthly_long <- monthly_flux %>%
+if (file.exists(partitioned_datetime_file)) {
+  partitioned <- read_csv(
+    partitioned_datetime_file,
+    show_col_types = FALSE
+  )
+} else {
+  partitioned <- read_csv(
+    partitioned_file,
+    show_col_types = FALSE
+  )
+
+  expected_rows <- ifelse(
+    leap_year(analysis_year),
+    366 * 48,
+    365 * 48
+  )
+
+  if (nrow(partitioned) != expected_rows) {
+    warning(
+      paste(
+        "Partitioned row count is",
+        nrow(partitioned),
+        "but expected",
+        expected_rows
+      )
+    )
+  }
+
+  partitioned <- partitioned %>%
+    mutate(
+      DateTime = as.POSIXct(
+        as.Date(paste0(analysis_year, "-01-01")),
+        tz = "Asia/Kuala_Lumpur"
+      ) +
+        minutes(30) * row_number(),
+
+      Year = year(DateTime),
+      DoY = yday(DateTime),
+      Hour = hour(DateTime) + minute(DateTime) / 60
+    ) %>%
+    relocate(
+      DateTime,
+      Year,
+      DoY,
+      Hour
+    )
+}
+
+# =========================================
+# 2. Select key variables
+# =========================================
+
+nee_col <- "NEE_U50_f"
+gpp_col <- "GPP_DT_U50"
+reco_col <- "Reco_DT_U50"
+
+required_cols <- c(
+  "DateTime",
+  nee_col,
+  gpp_col,
+  reco_col,
+  "Rg_f",
+  "Tair_f",
+  "VPD_f"
+)
+
+missing_cols <- setdiff(
+  required_cols,
+  names(partitioned)
+)
+
+if (length(missing_cols) > 0) {
+  stop(
+    paste(
+      "Missing required columns:",
+      paste(missing_cols, collapse = ", ")
+    )
+  )
+}
+
+# =========================================
+# 3. Prepare clean analysis dataset
+# =========================================
+
+partitioned <- partitioned %>%
+  mutate(
+    DateTime = as.POSIXct(
+      DateTime,
+      tz = "Asia/Kuala_Lumpur"
+    ),
+
+    NEE_raw = as.numeric(.data[[nee_col]]),
+    GPP = as.numeric(.data[[gpp_col]]),
+    Reco = as.numeric(.data[[reco_col]]),
+
+    Rg = as.numeric(Rg_f),
+    Tair = as.numeric(Tair_f),
+    VPD = as.numeric(VPD_f),
+
+    Month = month(DateTime, label = TRUE, abbr = TRUE),
+    Month_num = month(DateTime),
+
+    Season = case_when(
+      Month_num %in% c(12, 1, 2) ~ "DJF",
+      Month_num %in% c(3, 4, 5) ~ "MAM",
+      Month_num %in% c(6, 7, 8) ~ "JJA",
+      Month_num %in% c(9, 10, 11) ~ "SON",
+      TRUE ~ NA_character_
+    )
+  )
+
+# =========================================
+# 4. NEE outlier filtering for budget calculation
+# =========================================
+# REddyProc NEE may still contain rare extreme values after gap filling.
+# Use percentile-based filtering for monthly and annual budget stability.
+
+nee_lower <- quantile(
+  partitioned$NEE_raw,
+  0.005,
+  na.rm = TRUE
+)
+
+nee_upper <- quantile(
+  partitioned$NEE_raw,
+  0.995,
+  na.rm = TRUE
+)
+
+partitioned <- partitioned %>%
+  mutate(
+    NEE = ifelse(
+      NEE_raw < nee_lower |
+        NEE_raw > nee_upper,
+      NA,
+      NEE_raw
+    ),
+
+    # Half-hourly flux conversion:
+    # umol CO2 m-2 s-1 -> g C m-2 per 30 min
+    NEE_gC_30min = NEE * 1800 * 12.011 / 1000000,
+    GPP_gC_30min = GPP * 1800 * 12.011 / 1000000,
+    Reco_gC_30min = Reco * 1800 * 12.011 / 1000000
+  )
+
+cat("\n===== NEE filtering threshold =====\n")
+cat("NEE lower threshold:", nee_lower, "\n")
+cat("NEE upper threshold:", nee_upper, "\n")
+
+cat("\n===== Removed NEE outliers =====\n")
+print(
+  sum(
+    is.na(partitioned$NEE) &
+      !is.na(partitioned$NEE_raw)
+  )
+)
+
+# =========================================
+# 5. Monthly summary
+# =========================================
+
+monthly_flux <- partitioned %>%
+  group_by(Month) %>%
+  summarise(
+    Records = n(),
+
+    Monthly_NEE_mean = mean(NEE, na.rm = TRUE),
+    Monthly_GPP_mean = mean(GPP, na.rm = TRUE),
+    Monthly_Reco_mean = mean(Reco, na.rm = TRUE),
+
+    Monthly_NEE_sum_gC = sum(NEE_gC_30min, na.rm = TRUE),
+    Monthly_GPP_sum_gC = sum(GPP_gC_30min, na.rm = TRUE),
+    Monthly_Reco_sum_gC = sum(Reco_gC_30min, na.rm = TRUE),
+
+    Monthly_Rg_mean = mean(Rg, na.rm = TRUE),
+    Monthly_Tair_mean = mean(Tair, na.rm = TRUE),
+    Monthly_VPD_mean = mean(VPD, na.rm = TRUE),
+
+    NEE_NA = sum(is.na(NEE)),
+    GPP_NA = sum(is.na(GPP)),
+    Reco_NA = sum(is.na(Reco)),
+    Rg_NA = sum(is.na(Rg)),
+    Tair_NA = sum(is.na(Tair)),
+    VPD_NA = sum(is.na(VPD)),
+
+    .groups = "drop"
+  )
+
+cat("\n===== Monthly flux summary =====\n")
+print(monthly_flux)
+
+# =========================================
+# 6. Seasonal summary
+# =========================================
+
+seasonal_flux <- partitioned %>%
+  group_by(Season) %>%
+  summarise(
+    Records = n(),
+
+    Seasonal_NEE_mean = mean(NEE, na.rm = TRUE),
+    Seasonal_GPP_mean = mean(GPP, na.rm = TRUE),
+    Seasonal_Reco_mean = mean(Reco, na.rm = TRUE),
+
+    Seasonal_NEE_sum_gC = sum(NEE_gC_30min, na.rm = TRUE),
+    Seasonal_GPP_sum_gC = sum(GPP_gC_30min, na.rm = TRUE),
+    Seasonal_Reco_sum_gC = sum(Reco_gC_30min, na.rm = TRUE),
+
+    Seasonal_Rg_mean = mean(Rg, na.rm = TRUE),
+    Seasonal_Tair_mean = mean(Tair, na.rm = TRUE),
+    Seasonal_VPD_mean = mean(VPD, na.rm = TRUE),
+
+    .groups = "drop"
+  )
+
+cat("\n===== Seasonal flux summary =====\n")
+print(seasonal_flux)
+
+write_csv(
+  seasonal_flux,
+  file.path(
+    base_path,
+    paste0("seasonal_flux_", analysis_year, ".csv")
+  )
+)
+
+# =========================================
+# 7. Annual summary
+# =========================================
+
+annual_summary <- monthly_flux %>%
+  summarise(
+    Annual_NEE_gC = sum(Monthly_NEE_sum_gC, na.rm = TRUE),
+    Annual_GPP_gC = sum(Monthly_GPP_sum_gC, na.rm = TRUE),
+    Annual_Reco_gC = sum(Monthly_Reco_sum_gC, na.rm = TRUE),
+
+    Annual_NEE_mean = mean(Monthly_NEE_mean, na.rm = TRUE),
+    Annual_GPP_mean = mean(Monthly_GPP_mean, na.rm = TRUE),
+    Annual_Reco_mean = mean(Monthly_Reco_mean, na.rm = TRUE),
+
+    Mean_Rg = mean(Monthly_Rg_mean, na.rm = TRUE),
+    Mean_Tair = mean(Monthly_Tair_mean, na.rm = TRUE),
+    Mean_VPD = mean(Monthly_VPD_mean, na.rm = TRUE)
+  )
+
+cat("\n===== Annual summary =====\n")
+print(annual_summary)
+
+# =========================================
+# 8. Plot monthly mean carbon fluxes
+# =========================================
+
+monthly_flux_mean_long <- monthly_flux %>%
+  select(
+    Month,
+    Monthly_NEE_mean,
+    Monthly_GPP_mean,
+    Monthly_Reco_mean
+  ) %>%
   pivot_longer(
-    cols = c(Monthly_Rg,
-             Monthly_Tair,
-             Monthly_VPD),
+    cols = -Month,
     names_to = "Variable",
     values_to = "Value"
   )
 
-ggplot(monthly_long,
-       aes(x = Month,
-           y = Value,
-           group = Variable,
-           color = Variable)) +
+p1 <- ggplot(
+  monthly_flux_mean_long,
+  aes(
+    x = Month,
+    y = Value,
+    group = Variable,
+    color = Variable
+  )
+) +
   geom_line(linewidth = 1.2) +
   geom_point(size = 3) +
   theme_minimal() +
   labs(
-    title = "Monthly Environmental Drivers",
+    title = paste0("Monthly Mean Carbon Fluxes (", analysis_year, ")"),
     x = "Month",
-    y = "Value"
+    y = "Mean Flux"
   )
 
+print(p1)
+
 ggsave(
-  "/Users/caixiaoliang/Documents/Monthly_Environmental_Drivers_2016.png",
+  file.path(
+    base_path,
+    paste0("Monthly_Mean_Carbon_Fluxes_", analysis_year, ".png")
+  ),
+  p1,
   width = 10,
   height = 6,
-  dpi = 300
+  dpi = 600
 )
 
 # =========================================
-# 6. Standardized environmental drivers
+# 9. Plot monthly carbon budget
+# =========================================
+
+monthly_flux_sum_long <- monthly_flux %>%
+  select(
+    Month,
+    Monthly_NEE_sum_gC,
+    Monthly_GPP_sum_gC,
+    Monthly_Reco_sum_gC
+  ) %>%
+  pivot_longer(
+    cols = -Month,
+    names_to = "Variable",
+    values_to = "Value"
+  )
+
+p2 <- ggplot(
+  monthly_flux_sum_long,
+  aes(
+    x = Month,
+    y = Value,
+    group = Variable,
+    color = Variable
+  )
+) +
+  geom_line(linewidth = 1.2) +
+  geom_point(size = 3) +
+  theme_minimal() +
+  labs(
+    title = paste0("Monthly Carbon Budget (", analysis_year, ")"),
+    x = "Month",
+    y = "g C m-2 month-1"
+  )
+
+print(p2)
+
+ggsave(
+  file.path(
+    base_path,
+    paste0("Monthly_Carbon_Budget_", analysis_year, ".png")
+  ),
+  p2,
+  width = 10,
+  height = 6,
+  dpi = 600
+)
+
+# =========================================
+# 10. Plot monthly environmental drivers
+# =========================================
+
+monthly_env_long <- monthly_flux %>%
+  select(
+    Month,
+    Monthly_Rg_mean,
+    Monthly_Tair_mean,
+    Monthly_VPD_mean
+  ) %>%
+  pivot_longer(
+    cols = -Month,
+    names_to = "Variable",
+    values_to = "Value"
+  )
+
+p3 <- ggplot(
+  monthly_env_long,
+  aes(
+    x = Month,
+    y = Value,
+    group = Variable,
+    color = Variable
+  )
+) +
+  geom_line(linewidth = 1.2) +
+  geom_point(size = 3) +
+  theme_minimal() +
+  labs(
+    title = paste0("Monthly Environmental Drivers (", analysis_year, ")"),
+    x = "Month",
+    y = "Mean Value"
+  )
+
+print(p3)
+
+ggsave(
+  file.path(
+    base_path,
+    paste0("Monthly_Environmental_Drivers_", analysis_year, ".png")
+  ),
+  p3,
+  width = 10,
+  height = 6,
+  dpi = 600
+)
+
+# =========================================
+# 11. Standardized environmental drivers
 # =========================================
 
 monthly_scaled <- monthly_flux %>%
   mutate(
-    Rg_scaled    = scale(Monthly_Rg)[,1],
-    Tair_scaled  = scale(Monthly_Tair)[,1],
-    VPD_scaled   = scale(Monthly_VPD)[,1]
+    Rg_scaled = as.numeric(scale(Monthly_Rg_mean)),
+    Tair_scaled = as.numeric(scale(Monthly_Tair_mean)),
+    VPD_scaled = as.numeric(scale(Monthly_VPD_mean))
   ) %>%
   select(
     Month,
@@ -120,57 +469,172 @@ monthly_scaled <- monthly_flux %>%
     values_to = "Value"
   )
 
-ggplot(monthly_scaled,
-       aes(x = Month,
-           y = Value,
-           group = Variable,
-           color = Variable)) +
+p4 <- ggplot(
+  monthly_scaled,
+  aes(
+    x = Month,
+    y = Value,
+    group = Variable,
+    color = Variable
+  )
+) +
   geom_line(linewidth = 1.2) +
   geom_point(size = 3) +
   theme_minimal() +
   labs(
-    title = "Standardized Monthly Environmental Drivers",
+    title = paste0("Standardized Monthly Environmental Drivers (", analysis_year, ")"),
     x = "Month",
     y = "Scaled Value"
   )
 
+print(p4)
+
 ggsave(
-  "/Users/caixiaoliang/Documents/Scaled_Environmental_Drivers_2016.png",
+  file.path(
+    base_path,
+    paste0("Scaled_Environmental_Drivers_", analysis_year, ".png")
+  ),
+  p4,
   width = 10,
   height = 6,
-  dpi = 300
+  dpi = 600
 )
 
 # =========================================
-# 7. Correlation analysis
+# 12. Correlation analysis
 # =========================================
 
 correlation_data <- monthly_flux %>%
   select(
-    Monthly_NEE,
-    Monthly_Rg,
-    Monthly_Tair,
-    Monthly_VPD
+    Monthly_NEE_mean,
+    Monthly_GPP_mean,
+    Monthly_Reco_mean,
+    Monthly_Rg_mean,
+    Monthly_Tair_mean,
+    Monthly_VPD_mean
   )
 
-cor_matrix <- cor(
+pearson_cor_matrix <- cor(
   correlation_data,
-  use = "complete.obs"
+  use = "complete.obs",
+  method = "pearson"
 )
 
-print(cor_matrix)
+spearman_cor_matrix <- cor(
+  correlation_data,
+  use = "complete.obs",
+  method = "spearman"
+)
+
+cat("\n===== Monthly Pearson correlation matrix =====\n")
+print(pearson_cor_matrix)
+
+cat("\n===== Monthly Spearman correlation matrix =====\n")
+print(spearman_cor_matrix)
+
+pearson_cor_df <- as.data.frame(pearson_cor_matrix) %>%
+  rownames_to_column(
+    var = "Variable"
+  )
+
+spearman_cor_df <- as.data.frame(spearman_cor_matrix) %>%
+  rownames_to_column(
+    var = "Variable"
+  )
 
 # =========================================
-# 8. Save monthly dataset
+# 13. Simple regression models
+# =========================================
+
+model_gpp_rg <- lm(
+  Monthly_GPP_mean ~ Monthly_Rg_mean,
+  data = monthly_flux
+)
+
+model_gpp_vpd <- lm(
+  Monthly_GPP_mean ~ Monthly_VPD_mean,
+  data = monthly_flux
+)
+
+model_reco_tair <- lm(
+  Monthly_Reco_mean ~ Monthly_Tair_mean,
+  data = monthly_flux
+)
+
+model_nee_env <- lm(
+  Monthly_NEE_mean ~ Monthly_Rg_mean + Monthly_Tair_mean + Monthly_VPD_mean,
+  data = monthly_flux
+)
+
+model_summary <- tibble(
+  Model = c(
+    "GPP ~ Rg",
+    "GPP ~ VPD",
+    "Reco ~ Tair",
+    "NEE ~ Rg + Tair + VPD"
+  ),
+  R_squared = c(
+    summary(model_gpp_rg)$r.squared,
+    summary(model_gpp_vpd)$r.squared,
+    summary(model_reco_tair)$r.squared,
+    summary(model_nee_env)$r.squared
+  ),
+  Adjusted_R_squared = c(
+    summary(model_gpp_rg)$adj.r.squared,
+    summary(model_gpp_vpd)$adj.r.squared,
+    summary(model_reco_tair)$adj.r.squared,
+    summary(model_nee_env)$adj.r.squared
+  ),
+  P_value = c(
+    summary(model_gpp_rg)$coefficients[2, 4],
+    summary(model_gpp_vpd)$coefficients[2, 4],
+    summary(model_reco_tair)$coefficients[2, 4],
+    NA_real_
+  )
+)
+
+cat("\n===== Regression model summary =====\n")
+print(model_summary)
+
+# =========================================
+# 14. Save outputs
 # =========================================
 
 write_csv(
   monthly_flux,
-  "/Users/caixiaoliang/Documents/monthly_flux_2016.csv"
+  monthly_output_file
 )
 
-# =========================================
-# 9. Finished
-# =========================================
+write_csv(
+  annual_summary,
+  annual_output_file
+)
 
-print("Monthly flux and environmental analysis completed successfully.")
+write_csv(
+  pearson_cor_df,
+  correlation_output_file
+)
+
+write_csv(
+  spearman_cor_df,
+  spearman_output_file
+)
+
+write_csv(
+  model_summary,
+  file.path(
+    base_path,
+    paste0("monthly_regression_summary_", analysis_year, ".csv")
+  )
+)
+
+cat("\n=========================================\n")
+cat("09 monthly flux and environmental analysis completed successfully\n")
+cat("=========================================\n")
+cat("Saved files:\n")
+cat(monthly_output_file, "\n")
+cat(annual_output_file, "\n")
+cat(correlation_output_file, "\n")
+cat(spearman_output_file, "\n")
+cat(file.path(base_path, paste0("seasonal_flux_", analysis_year, ".csv")), "\n")
+cat(file.path(base_path, paste0("monthly_regression_summary_", analysis_year, ".csv")), "\n")

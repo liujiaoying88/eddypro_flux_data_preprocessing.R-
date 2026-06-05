@@ -119,7 +119,7 @@ flux_core <- flux %>%
     ),
 
     # Remove physically unreasonable VPD values.
-    # Values above 60 hPa are treated as invalid for this site-level workflow.
+    # Values above 60 hPa are treated as invalid for this workflow.
     VPD = ifelse(
       VPD > 60,
       NA,
@@ -148,6 +148,14 @@ flux_core <- flux %>%
         NA,
         .
       )
+    ),
+
+    # Remove extreme NEE outliers for partitioning stability.
+    # REddyProc partitioning is sensitive to extreme NEE values.
+    NEE = ifelse(
+      NEE < -50 | NEE > 50,
+      NA,
+      NEE
     )
   ) %>%
   arrange(
@@ -277,6 +285,15 @@ cat("Rg negative count should be 0:\n")
 print(
   sum(
     flux_reddyproc$Rg < 0,
+    na.rm = TRUE
+  )
+)
+
+cat("Extreme NEE count should be 0:\n")
+print(
+  sum(
+    flux_reddyproc$NEE < -50 |
+      flux_reddyproc$NEE > 50,
     na.rm = TRUE
   )
 )

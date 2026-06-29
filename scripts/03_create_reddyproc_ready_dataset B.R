@@ -1,6 +1,7 @@
 # ============================================================
-# 03_create_reddyproc_ready_dataset.R
-# Create REddyProc-ready Dataset for 2016–2025 Muka Head data
+# 03B_create_reddyproc_ready_dataset.R
+# Create REddyProc-ready Dataset from QC-cleaned 2016–2025 data
+# Site: Muka Head
 # ============================================================
 
 library(tidyverse)
@@ -11,12 +12,12 @@ library(readr)
 # 1. File paths
 # =========================
 
-input_file <- "/Users/caixiaoliang/Documents/eddypro_muka_head01_fulloutput_biomet_2016_2025_datetime.csv"
+input_file <- "/Users/caixiaoliang/Documents/eddypro_muka_head01_fulloutput_biomet_2016_2025_qc.csv"
 
 output_file <- "/Users/caixiaoliang/Documents/reddyproc_ready_mukahead_2016_2025.csv"
 
 # =========================
-# 2. Read timestamp-processed dataset
+# 2. Read QC-cleaned dataset
 # =========================
 
 flux <- read_csv(
@@ -26,48 +27,27 @@ flux <- read_csv(
 )
 
 # =========================
-# 3. Define variable mapping
+# 3. Check required columns
 # =========================
-
-nee_col <- "co2_flux"
-rg_col <- "RG_1_1_1"
-tair_col <- "TA_1_1_1"
-vpd_col <- "VPD"
-ustar_col <- "u*"
 
 required_cols <- c(
   "datetime",
   "year",
   "doy",
   "decimal_hour",
-  nee_col,
-  rg_col,
-  tair_col,
-  vpd_col,
-  ustar_col
+  "co2_flux",
+  "Rg",
+  "Tair",
+  "VPD",
+  "Ustar"
 )
 
-missing_cols <- setdiff(
-  required_cols,
-  names(flux)
-)
+missing_cols <- setdiff(required_cols, names(flux))
 
 if (length(missing_cols) > 0) {
   cat("\nMissing columns:\n")
   print(missing_cols)
-  
-  cat("\nPossible alternative columns:\n")
-  print(
-    names(flux)[
-      grepl(
-        "co2|FC|NEE|RG|SW|TA|air_temperature|VPD|USTAR|u\\*|Tair",
-        names(flux),
-        ignore.case = TRUE
-      )
-    ]
-  )
-  
-  stop("Some required columns are missing.")
+  stop("Some required columns are missing from the QC dataset.")
 }
 
 # =========================
@@ -76,58 +56,38 @@ if (length(missing_cols) > 0) {
 
 reddyproc_ready <- flux %>%
   transmute(
+    datetime = ymd_hms(datetime, tz = "Asia/Kuala_Lumpur"),
+    
     Year = as.integer(year),
-    DoY = as.numeric(doy),
+    DoY = as.integer(doy),
     Hour = round(as.numeric(decimal_hour), 1),
     
-    NEE = parse_number(as.character(.data[[nee_col]])),
-    Rg = parse_number(as.character(.data[[rg_col]])),
-    Tair = parse_number(as.character(.data[[tair_col]])),
-    VPD = parse_number(as.character(.data[[vpd_col]])),
-    Ustar = parse_number(as.character(.data[[ustar_col]])),
-    
-    datetime = ymd_hms(datetime, tz = "Asia/Kuala_Lumpur")
+    NEE = as.numeric(co2_flux),
+    Rg = as.numeric(Rg),
+    Tair = as.numeric(Tair),
+    VPD = as.numeric(VPD),
+    Ustar = as.numeric(Ustar)
+  ) %>%
+  mutate(
+    # Nighttime very small radiation values are set to 0
+    Rg = ifelse(!is.na(Rg) & Rg < 1, 0, Rg)
   )
 
 # =========================
-# 5. Unit conversion
-# =========================
-
-# Tair: Kelvin -> Celsius
-if (median(reddyproc_ready$Tair, na.rm = TRUE) > 100) {
-  reddyproc_ready <- reddyproc_ready %>%
-    mutate(
-      Tair = Tair - 273.15
-    )
-  
-  cat("\nTair converted from Kelvin to Celsius.\n")
-}
-
-# VPD: Pa -> hPa
-if (median(reddyproc_ready$VPD, na.rm = TRUE) > 100) {
-  reddyproc_ready <- reddyproc_ready %>%
-    mutate(
-      VPD = VPD / 100
-    )
-  
-  cat("\nVPD converted from Pa to hPa.\n")
-}
-
-# =========================
-# 6. Clean invalid records
+# 5. Remove invalid time records
 # =========================
 
 reddyproc_ready <- reddyproc_ready %>%
   filter(
+    !is.na(datetime),
     !is.na(Year),
     !is.na(DoY),
-    !is.na(Hour),
-    !is.na(datetime)
+    !is.na(Hour)
   ) %>%
   arrange(datetime)
 
 # =========================
-# 7. Check timestamp continuity
+# 6. Check timestamp continuity
 # =========================
 
 full_time <- tibble(
@@ -152,7 +112,7 @@ if (nrow(missing_rows) > 0) {
 }
 
 # =========================
-# 8. Check duplicated timestamps
+# 7. Check duplicated timestamps
 # =========================
 
 duplicate_count <- sum(
@@ -161,6 +121,16 @@ duplicate_count <- sum(
 
 cat("\n===== Duplicated timestamps =====\n")
 cat("Duplicated timestamp count:", duplicate_count, "\n")
+
+# =========================
+# 8. Check Hour range
+# =========================
+
+cat("\n===== Hour range =====\n")
+print(range(reddyproc_ready$Hour, na.rm = TRUE))
+
+cat("\n===== Unique Hour values =====\n")
+print(sort(unique(reddyproc_ready$Hour)))
 
 # =========================
 # 9. Final REddyProc export
@@ -190,6 +160,23 @@ print(summary(reddyproc_ready_export))
 
 cat("\n===== Records by year =====\n")
 print(table(reddyproc_ready_export$Year))
+
+cat("\n===== Missing percentage in REddyProc-ready dataset =====\n")
+
+missing_summary <- reddyproc_ready_export %>%
+  summarise(
+    across(
+      everything(),
+      ~ mean(is.na(.)) * 100
+    )
+  ) %>%
+  pivot_longer(
+    cols = everything(),
+    names_to = "Variable",
+    values_to = "Missing_percent"
+  )
+
+print(missing_summary)
 
 # =========================
 # 11. Save dataset

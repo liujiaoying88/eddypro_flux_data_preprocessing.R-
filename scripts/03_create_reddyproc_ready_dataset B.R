@@ -1,137 +1,121 @@
-# =========================================
-# 03B Create REddyProc-ready Dataset
-# Site: MukaHead
-# Author: Cai Xiaoliang
-# =========================================
+# ============================================================
+# 03_create_reddyproc_ready_dataset.R
+# Create REddyProc-ready Dataset for 2016–2025 Muka Head data
+# ============================================================
 
 library(tidyverse)
 library(lubridate)
+library(readr)
 
-# =========================================
-# 1. Set analysis year
-# =========================================
+input_file <- "/Users/caixiaoliang/Documents/eddypro_muka_head01_fulloutput_biomet_2016_2025_datetime.csv"
 
-analysis_year <- 2016
+output_file <- "/Users/caixiaoliang/Documents/reddyproc_ready_mukahead_2016_2025.csv"
 
-# =========================================
-# 2. Read QC-cleaned dataset
-# =========================================
-
-input_file <- paste0(
-  "/Users/caixiaoliang/Documents/analysis_",
-  analysis_year,
-  "_qc.csv"
+flux <- read_csv(
+  input_file,
+  show_col_types = FALSE,
+  na = c("NA", "-9999", "-9999.0")
 )
 
-flux <- read_csv(input_file)
+# 变量映射
+nee_col <- "co2_flux"
+rg_col <- "RG_1_1_1"
+tair_col <- "TA_1_1_1"
+vpd_col <- "VPD"
+ustar_col <- "u*"
 
-# =========================================
-# 3. Create datetime
-# =========================================
+required_cols <- c(
+  "datetime", "year", "doy", "decimal_hour",
+  nee_col, rg_col, tair_col, vpd_col, ustar_col
+)
 
-flux <- flux %>%
-  mutate(
-    DateTime = ymd_hm(TIMESTAMP_START)
+missing_cols <- setdiff(required_cols, names(flux))
+
+if (length(missing_cols) > 0) {
+  print(missing_cols)
+  stop("Some required columns are missing.")
+}
+
+# 创建 REddyProc-ready 数据
+reddyproc_ready <- flux %>%
+  transmute(
+    Year = as.integer(year),
+    DoY = as.numeric(doy),
+    Hour = as.numeric(decimal_hour),
+    NEE = parse_number(as.character(.data[[nee_col]])),
+    Rg = parse_number(as.character(.data[[rg_col]])),
+    Tair = parse_number(as.character(.data[[tair_col]])),
+    VPD = parse_number(as.character(.data[[vpd_col]])),
+    Ustar = parse_number(as.character(.data[[ustar_col]])),
+    datetime = ymd_hms(datetime, tz = "Asia/Kuala_Lumpur")
   )
 
-# =========================================
-# 4. Generate REddyProc time variables
-# =========================================
+# Tair: Kelvin -> Celsius
+if (median(reddyproc_ready$Tair, na.rm = TRUE) > 100) {
+  reddyproc_ready <- reddyproc_ready %>%
+    mutate(Tair = Tair - 273.15)
+  cat("Tair converted from Kelvin to Celsius.\n")
+}
 
-flux <- flux %>%
-  mutate(
-    Year = year(DateTime),
-    DoY = yday(DateTime),
-    Hour =
-      hour(DateTime) +
-      minute(DateTime) / 60
-  )
+# VPD: Pa -> hPa
+if (median(reddyproc_ready$VPD, na.rm = TRUE) > 100) {
+  reddyproc_ready <- reddyproc_ready %>%
+    mutate(VPD = VPD / 100)
+  cat("VPD converted from Pa to hPa.\n")
+}
 
-# =========================================
-# 5. Check timestamp continuity
-# =========================================
+# 删除时间变量缺失行
+reddyproc_ready <- reddyproc_ready %>%
+  filter(
+    !is.na(Year),
+    !is.na(DoY),
+    !is.na(Hour)
+  ) %>%
+  arrange(datetime)
 
+# 检查缺失时间
 full_time <- tibble(
-  DateTime = seq(
-    from = min(flux$DateTime, na.rm = TRUE),
-    to   = max(flux$DateTime, na.rm = TRUE),
-    by   = "30 min"
+  datetime = seq(
+    from = min(reddyproc_ready$datetime, na.rm = TRUE),
+    to = max(reddyproc_ready$datetime, na.rm = TRUE),
+    by = "30 min"
   )
 )
 
 missing_rows <- full_time %>%
-  anti_join(flux, by = "DateTime")
+  anti_join(reddyproc_ready, by = "datetime")
 
 cat("\n===== Missing timestamps =====\n")
-print(nrow(missing_rows))
-
-if(nrow(missing_rows) > 0){
-  print(head(missing_rows))
-}
-
-# =========================================
-# 6. Check duplicated timestamps
-# =========================================
-
-duplicate_count <- sum(duplicated(flux$DateTime))
+cat("Missing timestamp count:", nrow(missing_rows), "\n")
 
 cat("\n===== Duplicated timestamps =====\n")
-print(duplicate_count)
+cat("Duplicated timestamp count:", sum(duplicated(reddyproc_ready$datetime)), "\n")
 
-# =========================================
-# 7. Create REddyProc-ready dataset
-# =========================================
+cat("\n===== Records by year =====\n")
+print(table(reddyproc_ready$Year))
 
-reddyproc_ready <- flux %>%
-  transmute(
-
-    Year = Year,
-
-    DoY = DoY,
-
-    Hour = Hour,
-
-    NEE = FC,
-
-    Rg = SW_IN_POT,
-
-    Tair = TA_EP,
-
-    VPD = VPD_EP,
-
-    Ustar = USTAR
+# 输出 REddyProc 输入文件
+reddyproc_ready_export <- reddyproc_ready %>%
+  select(
+    Year,
+    DoY,
+    Hour,
+    NEE,
+    Rg,
+    Tair,
+    VPD,
+    Ustar
   )
 
-# =========================================
-# 8. Summary check
-# =========================================
-
-cat("\n===== Dataset structure =====\n")
-glimpse(reddyproc_ready)
-
 cat("\n===== Summary =====\n")
-print(summary(reddyproc_ready))
-
-# =========================================
-# 9. Save dataset
-# =========================================
-
-output_file <- paste0(
-  "/Users/caixiaoliang/Documents/reddyproc_ready_",
-  analysis_year,
-  ".csv"
-)
+print(summary(reddyproc_ready_export))
 
 write_csv(
-  reddyproc_ready,
-  output_file
+  reddyproc_ready_export,
+  output_file,
+  na = "NA"
 )
 
-# =========================================
-# 10. Finished
-# =========================================
-
 cat("\nREddyProc-ready dataset created successfully.\n")
-
-cat("\nSaved file:\n")
-cat(output_file)
+cat("Saved file:\n")
+cat(output_file, "\n")

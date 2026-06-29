@@ -1,30 +1,73 @@
-# =========================================
-# 03A Flux Quality Control
-# Site: MukaHead
-# Author: Cai Xiaoliang
-# =========================================
+# ============================================================
+# 03A_flux_quality_control_2016_2025.R
+# Flux Quality Control for Muka Head 2016–2025 merged dataset
+# ============================================================
 
 library(tidyverse)
 library(lubridate)
+library(readr)
 
-analysis_year <- 2016
+# =========================
+# 1. File paths
+# =========================
 
-input_file <- paste0(
-  "/Users/caixiaoliang/Documents/analysis_",
-  analysis_year,
-  ".csv"
+input_file <- "/Users/caixiaoliang/Documents/eddypro_muka_head01_fulloutput_biomet_2016_2025_datetime.csv"
+
+output_file <- "/Users/caixiaoliang/Documents/eddypro_muka_head01_fulloutput_biomet_2016_2025_qc.csv"
+
+qc_report_file <- "/Users/caixiaoliang/Documents/qc_report_2016_2025.csv"
+
+fig_raw_file <- "/Users/caixiaoliang/Documents/co2_flux_raw_2016_2025.png"
+
+fig_qc_file <- "/Users/caixiaoliang/Documents/co2_flux_qc_cleaned_2016_2025.png"
+
+# =========================
+# 2. Read dataset
+# =========================
+
+flux_raw <- read_csv(
+  input_file,
+  show_col_types = FALSE,
+  na = c("NA", "-9999", "-9999.0")
 )
 
-flux_raw <- read_csv(input_file)
+# =========================
+# 3. Variable mapping
+# =========================
 
 flux <- flux_raw %>%
-  mutate(datetime = ymd_hm(TIMESTAMP_START)) %>%
   mutate(
-    across(
-      c(FC, LE, H, USTAR, TA_EP, RH_EP, VPD_EP, SW_IN_POT),
-      ~ ifelse(. < -9990, NA, .)
-    )
+    datetime = ymd_hms(datetime, tz = "Asia/Kuala_Lumpur"),
+    
+    co2_flux = parse_number(as.character(co2_flux)),
+    LE = parse_number(as.character(LE)),
+    H = parse_number(as.character(H)),
+    Ustar = parse_number(as.character(`u*`)),
+    Tair = parse_number(as.character(TA_1_1_1)),
+    RH = parse_number(as.character(RH_1_1_1)),
+    VPD = parse_number(as.character(VPD)),
+    Rg = parse_number(as.character(RG_1_1_1))
   )
+
+# =========================
+# 4. Unit conversion
+# =========================
+
+# Tair: Kelvin to Celsius
+if (median(flux$Tair, na.rm = TRUE) > 100) {
+  flux <- flux %>%
+    mutate(Tair = Tair - 273.15)
+}
+
+# VPD: Pa to hPa
+if (median(flux$VPD, na.rm = TRUE) > 100) {
+  flux <- flux %>%
+    mutate(VPD = VPD / 100)
+}
+
+# =========================
+# 5. Basic checks
+# =========================
 
 cat("===== Timestamp range =====\n")
 print(range(flux$datetime, na.rm = TRUE))
@@ -35,17 +78,20 @@ print(sum(duplicated(flux$datetime)))
 cat("\n===== Number of records =====\n")
 print(nrow(flux))
 
+cat("\n===== Records by year =====\n")
+print(table(year(flux$datetime)))
+
+# =========================
+# 6. Missing percentage before QC
+# =========================
+
+qc_vars <- c("co2_flux", "LE", "H", "Ustar", "Tair", "RH", "VPD", "Rg")
+
 missing_before <- tibble(
-  Variable = c("FC", "LE", "H", "USTAR", "TA_EP", "RH_EP", "VPD_EP", "SW_IN_POT"),
-  Missing_percent = c(
-    mean(is.na(flux$FC)) * 100,
-    mean(is.na(flux$LE)) * 100,
-    mean(is.na(flux$H)) * 100,
-    mean(is.na(flux$USTAR)) * 100,
-    mean(is.na(flux$TA_EP)) * 100,
-    mean(is.na(flux$RH_EP)) * 100,
-    mean(is.na(flux$VPD_EP)) * 100,
-    mean(is.na(flux$SW_IN_POT)) * 100
+  Variable = qc_vars,
+  Missing_before_percent = map_dbl(
+    qc_vars,
+    ~ mean(is.na(flux[[.x]])) * 100
   )
 )
 
@@ -53,63 +99,72 @@ cat("\n===== Missing percentage before QC =====\n")
 print(missing_before)
 
 cat("\n===== Summary before QC =====\n")
-print(summary(flux %>% select(FC, LE, H, USTAR, TA_EP, RH_EP, VPD_EP, SW_IN_POT)))
+print(summary(flux %>% select(all_of(qc_vars))))
+
+# =========================
+# 7. Apply QC thresholds
+# =========================
 
 flux_qc <- flux %>%
   mutate(
-    FC = case_when(
-      FC < -50 ~ NA_real_,
-      FC > 50 ~ NA_real_,
-      TRUE ~ FC
+    co2_flux = case_when(
+      co2_flux < -50 ~ NA_real_,
+      co2_flux > 50 ~ NA_real_,
+      TRUE ~ co2_flux
     ),
+    
     LE = case_when(
       LE < -500 ~ NA_real_,
       LE > 800 ~ NA_real_,
       TRUE ~ LE
     ),
+    
     H = case_when(
       H < -300 ~ NA_real_,
       H > 500 ~ NA_real_,
       TRUE ~ H
     ),
-    USTAR = case_when(
-      USTAR < 0 ~ NA_real_,
-      USTAR > 3 ~ NA_real_,
-      TRUE ~ USTAR
+    
+    Ustar = case_when(
+      Ustar < 0 ~ NA_real_,
+      Ustar > 3 ~ NA_real_,
+      TRUE ~ Ustar
     ),
-    TA_EP = case_when(
-      TA_EP < 10 ~ NA_real_,
-      TA_EP > 45 ~ NA_real_,
-      TRUE ~ TA_EP
+    
+    Tair = case_when(
+      Tair < 10 ~ NA_real_,
+      Tair > 45 ~ NA_real_,
+      TRUE ~ Tair
     ),
-    RH_EP = case_when(
-      RH_EP < 0 ~ NA_real_,
-      RH_EP > 100 ~ NA_real_,
-      TRUE ~ RH_EP
+    
+    RH = case_when(
+      RH < 0 ~ NA_real_,
+      RH > 100 ~ NA_real_,
+      TRUE ~ RH
     ),
-    VPD_EP = case_when(
-      VPD_EP < 0 ~ NA_real_,
-      VPD_EP > 40 ~ NA_real_,
-      TRUE ~ VPD_EP
+    
+    VPD = case_when(
+      VPD < 0 ~ NA_real_,
+      VPD > 40 ~ NA_real_,
+      TRUE ~ VPD
     ),
-    SW_IN_POT = case_when(
-      SW_IN_POT < 0 ~ NA_real_,
-      SW_IN_POT > 1200 ~ NA_real_,
-      TRUE ~ SW_IN_POT
+    
+    Rg = case_when(
+      Rg < 0 ~ NA_real_,
+      Rg > 1200 ~ NA_real_,
+      TRUE ~ Rg
     )
   )
 
+# =========================
+# 8. Missing percentage after QC
+# =========================
+
 missing_after <- tibble(
-  Variable = c("FC", "LE", "H", "USTAR", "TA_EP", "RH_EP", "VPD_EP", "SW_IN_POT"),
-  Missing_percent = c(
-    mean(is.na(flux_qc$FC)) * 100,
-    mean(is.na(flux_qc$LE)) * 100,
-    mean(is.na(flux_qc$H)) * 100,
-    mean(is.na(flux_qc$USTAR)) * 100,
-    mean(is.na(flux_qc$TA_EP)) * 100,
-    mean(is.na(flux_qc$RH_EP)) * 100,
-    mean(is.na(flux_qc$VPD_EP)) * 100,
-    mean(is.na(flux_qc$SW_IN_POT)) * 100
+  Variable = qc_vars,
+  Missing_after_percent = map_dbl(
+    qc_vars,
+    ~ mean(is.na(flux_qc[[.x]])) * 100
   )
 )
 
@@ -117,67 +172,90 @@ cat("\n===== Missing percentage after QC =====\n")
 print(missing_after)
 
 cat("\n===== Summary after QC =====\n")
-print(summary(flux_qc %>% select(FC, LE, H, USTAR, TA_EP, RH_EP, VPD_EP, SW_IN_POT)))
+print(summary(flux_qc %>% select(all_of(qc_vars))))
+
+# =========================
+# 9. QC report
+# =========================
 
 qc_report <- missing_before %>%
-  rename(Missing_before_percent = Missing_percent) %>%
   left_join(
-    missing_after %>%
-      rename(Missing_after_percent = Missing_percent),
+    missing_after,
     by = "Variable"
   ) %>%
   mutate(
-    Removed_by_QC_percent = Missing_after_percent - Missing_before_percent
+    Removed_by_QC_percent =
+      Missing_after_percent - Missing_before_percent
   )
 
 write_csv(
   qc_report,
-  paste0("/Users/caixiaoliang/Documents/qc_report_", analysis_year, ".csv")
+  qc_report_file,
+  na = "NA"
 )
 
-p_raw <- ggplot(flux, aes(x = datetime, y = FC)) +
-  geom_line(color = "blue") +
+# =========================
+# 10. Plot raw co2_flux
+# =========================
+
+p_raw <- ggplot(flux, aes(x = datetime, y = co2_flux)) +
+  geom_line(color = "blue", linewidth = 0.2) +
   theme_minimal() +
   labs(
-    title = paste0(analysis_year, " Raw FC Time Series (-9999 removed)"),
+    title = "2016–2025 Raw CO2 Flux Time Series",
     x = "Date",
-    y = "FC"
+    y = "CO2 flux"
   )
 
 print(p_raw)
 
 ggsave(
-  paste0("/Users/caixiaoliang/Documents/FC_raw_", analysis_year, ".png"),
+  fig_raw_file,
   plot = p_raw,
-  width = 12,
+  width = 14,
   height = 6,
   dpi = 300
 )
 
-p_qc <- ggplot(flux_qc, aes(x = datetime, y = FC)) +
-  geom_line(color = "red") +
+# =========================
+# 11. Plot QC-cleaned co2_flux
+# =========================
+
+p_qc <- ggplot(flux_qc, aes(x = datetime, y = co2_flux)) +
+  geom_line(color = "red", linewidth = 0.2) +
   theme_minimal() +
   labs(
-    title = paste0(analysis_year, " QC-cleaned FC Time Series"),
+    title = "2016–2025 QC-cleaned CO2 Flux Time Series",
     x = "Date",
-    y = "FC"
+    y = "CO2 flux"
   )
 
 print(p_qc)
 
 ggsave(
-  paste0("/Users/caixiaoliang/Documents/FC_qc_cleaned_", analysis_year, ".png"),
+  fig_qc_file,
   plot = p_qc,
-  width = 12,
+  width = 14,
   height = 6,
   dpi = 300
 )
 
+# =========================
+# 12. Save QC dataset
+# =========================
+
 write_csv(
   flux_qc,
-  paste0("/Users/caixiaoliang/Documents/analysis_", analysis_year, "_qc.csv")
+  output_file,
+  na = "NA"
 )
+
+# =========================
+# 13. Finished
+# =========================
 
 cat("\nFlux QC completed successfully.\n")
 cat("QC dataset saved as:\n")
-cat(paste0("/Users/caixiaoliang/Documents/analysis_", analysis_year, "_qc.csv\n"))
+cat(output_file, "\n")
+cat("QC report saved as:\n")
+cat(qc_report_file, "\n")

@@ -1,57 +1,46 @@
-# =========================================
-# 04 Prepare REddyProc Input Dataset
-# Site: MukaHead
-# Author: Cai Xiaoliang
-# Purpose:
-#   Create complete half-hourly REddyProc input dataset.
-#   REddyProc convention:
-#   - Half-hourly timestamp uses end time.
-#   - First record should be Hour = 0.5.
-#   - Last record should be Hour = 24.
-# =========================================
+# ============================================================
+# 04_prepare_reddyproc_input_2016_2025.R
+# Prepare complete half-hourly REddyProc input dataset
+# Site: Muka Head
+# ============================================================
 
 library(tidyverse)
 library(lubridate)
+library(readr)
 
-# =========================================
-# 0. Parameters
-# =========================================
+# =========================
+# 1. File paths
+# =========================
 
-analysis_year <- 2016
-base_path <- "~/Documents"
+input_file <- "/Users/caixiaoliang/Documents/reddyproc_ready_mukahead_2016_2025.csv"
 
-input_file <- file.path(
-  base_path,
-  paste0("analysis_", analysis_year, ".csv")
-)
+output_file <- "/Users/caixiaoliang/Documents/reddyproc_input_mukahead_2016_2025.csv"
 
-output_file <- file.path(
-  base_path,
-  paste0("reddyproc_input_", analysis_year, ".csv")
-)
+missing_report_file <- "/Users/caixiaoliang/Documents/reddyproc_input_missing_report_2016_2025.csv"
 
-# =========================================
-# 1. Read analysis dataset
-# =========================================
+# =========================
+# 2. Read REddyProc-ready dataset
+# =========================
 
 flux <- read_csv(
   input_file,
-  show_col_types = FALSE
+  show_col_types = FALSE,
+  na = c("NA", "-9999", "-9999.0")
 )
 
-# =========================================
-# 2. Check required columns
-# =========================================
+# =========================
+# 3. Check required columns
+# =========================
 
 required_cols <- c(
   "Year",
   "DoY",
   "Hour",
-  "FC",
+  "NEE",
   "Rg",
-  "TA_EP",
-  "VPD_EP",
-  "USTAR"
+  "Tair",
+  "VPD",
+  "Ustar"
 )
 
 missing_cols <- setdiff(
@@ -60,236 +49,210 @@ missing_cols <- setdiff(
 )
 
 if (length(missing_cols) > 0) {
-  stop(
-    paste(
-      "Missing required columns:",
-      paste(missing_cols, collapse = ", ")
-    )
-  )
+  cat("\nMissing columns:\n")
+  print(missing_cols)
+  stop("Some required columns are missing from reddyproc_ready dataset.")
 }
 
-# =========================================
-# 3. Map variables to REddyProc format
-# =========================================
+# =========================
+# 4. Clean and standardize variables
+# =========================
 
 flux_core <- flux %>%
   transmute(
     Year = as.integer(Year),
     DoY = as.integer(DoY),
     Hour = as.numeric(Hour),
-
-    NEE = suppressWarnings(
-      as.numeric(FC)
-    ),
-
-    Rg = suppressWarnings(
-      as.numeric(Rg)
-    ),
-
-    Tair = suppressWarnings(
-      as.numeric(TA_EP)
-    ),
-
-    VPD = suppressWarnings(
-      as.numeric(VPD_EP)
-    ),
-
-    Ustar = suppressWarnings(
-      as.numeric(USTAR)
-    )
-  ) %>%
-  filter(
-    Year == analysis_year
+    NEE = as.numeric(NEE),
+    Rg = as.numeric(Rg),
+    Tair = as.numeric(Tair),
+    VPD = as.numeric(VPD),
+    Ustar = as.numeric(Ustar)
   ) %>%
   mutate(
-    # EddyPro air_temperature may be Kelvin.
-    # REddyProc requires degree Celsius.
-    Tair = ifelse(
-      Tair > 100,
-      Tair - 273.15,
-      Tair
-    ),
-
-    # EddyPro VPD is often Pa.
-    # REddyProc expects hPa.
-    VPD = ifelse(
-      VPD > 100,
-      VPD / 100,
-      VPD
-    ),
-
-    # Remove physically unreasonable VPD values.
-    # Values above 60 hPa are treated as invalid for this workflow.
-    VPD = ifelse(
-      VPD > 60,
-      NA,
-      VPD
-    ),
-
-    # Very small negative nighttime radiation values
-    # are physically treated as zero for REddyProc.
-    Rg = ifelse(
-      Rg < 0,
-      0,
-      Rg
-    ),
-
-    # Basic missing-value safeguard
-    across(
-      c(
-        NEE,
-        Rg,
-        Tair,
-        VPD,
-        Ustar
-      ),
-      ~ ifelse(
-        . <= -9990,
-        NA,
-        .
-      )
-    ),
-
-    # Remove extreme NEE outliers for partitioning stability.
-    # REddyProc partitioning is sensitive to extreme NEE values.
-    NEE = ifelse(
-      NEE < -50 | NEE > 50,
-      NA,
-      NEE
-    )
+    # Basic physical safeguards
+    NEE = ifelse(NEE < -50 | NEE > 50, NA_real_, NEE),
+    Rg = ifelse(Rg < 0, NA_real_, Rg),
+    Rg = ifelse(!is.na(Rg) & Rg < 1, 0, Rg),
+    Tair = ifelse(Tair < 10 | Tair > 45, NA_real_, Tair),
+    VPD = ifelse(VPD < 0 | VPD > 60, NA_real_, VPD),
+    Ustar = ifelse(Ustar < 0 | Ustar > 3, NA_real_, Ustar)
+  ) %>%
+  filter(
+    Year >= 2016,
+    Year <= 2025,
+    DoY >= 1,
+    DoY <= 366,
+    Hour >= 0.5,
+    Hour <= 23.5
   ) %>%
   arrange(
+    Year,
     DoY,
     Hour
   )
 
-# =========================================
-# 4. Create complete half-hourly time grid
-# =========================================
+# =========================
+# 5. Remove duplicated time records
+# =========================
 
-n_days <- ifelse(
-  leap_year(analysis_year),
-  366,
-  365
-)
+dup_count <- flux_core %>%
+  count(Year, DoY, Hour) %>%
+  filter(n > 1) %>%
+  nrow()
 
-time_grid <- expand_grid(
-  Year = analysis_year,
-  DoY = 1:n_days,
-  Hour = seq(
-    0.5,
-    24,
-    by = 0.5
+cat("\nDuplicated Year-DoY-Hour groups before cleaning:\n")
+print(dup_count)
+
+flux_core <- flux_core %>%
+  group_by(Year, DoY, Hour) %>%
+  summarise(
+    across(
+      c(NEE, Rg, Tair, VPD, Ustar),
+      ~ ifelse(
+        all(is.na(.)),
+        NA_real_,
+        mean(., na.rm = TRUE)
+      )
+    ),
+    .groups = "drop"
   )
+
+# =========================
+# 6. Create complete half-hourly grid for 2016–2025
+# =========================
+
+years <- 2016:2025
+
+time_grid <- map_dfr(
+  years,
+  function(y) {
+    n_days <- ifelse(leap_year(y), 366, 365)
+    
+    expand_grid(
+      Year = y,
+      DoY = 1:n_days,
+      Hour = seq(0.5, 23.5, by = 0.5)
+    )
+  }
 ) %>%
   arrange(
+    Year,
     DoY,
     Hour
   )
 
-# =========================================
-# 5. Merge data with complete time grid
-# =========================================
+# =========================
+# 7. Merge with complete time grid
+# =========================
 
 flux_reddyproc <- time_grid %>%
   left_join(
     flux_core,
-    by = c(
-      "Year",
-      "DoY",
-      "Hour"
-    )
+    by = c("Year", "DoY", "Hour")
   ) %>%
   arrange(
+    Year,
     DoY,
     Hour
   )
 
-# =========================================
-# 6. QC
-# =========================================
+# =========================
+# 8. Missing report by year
+# =========================
+
+missing_report <- flux_reddyproc %>%
+  group_by(Year) %>%
+  summarise(
+    n_records = n(),
+    missing_NEE_percent = mean(is.na(NEE)) * 100,
+    missing_Rg_percent = mean(is.na(Rg)) * 100,
+    missing_Tair_percent = mean(is.na(Tair)) * 100,
+    missing_VPD_percent = mean(is.na(VPD)) * 100,
+    missing_Ustar_percent = mean(is.na(Ustar)) * 100,
+    .groups = "drop"
+  )
+
+write_csv(
+  missing_report,
+  missing_report_file,
+  na = "NA"
+)
+
+# =========================
+# 9. QC output
+# =========================
 
 cat("\n===== REddyProc input check =====\n")
-glimpse(flux_reddyproc)
 
 cat("\nRows:\n")
 print(nrow(flux_reddyproc))
 
 cat("\nExpected rows:\n")
-print(n_days * 48)
+expected_rows <- sum(
+  ifelse(
+    leap_year(years),
+    366 * 48,
+    365 * 48
+  )
+)
+print(expected_rows)
 
 cat("\nYear table:\n")
 print(table(flux_reddyproc$Year))
 
-cat("\nDoY range:\n")
-print(range(flux_reddyproc$DoY, na.rm = TRUE))
+cat("\nDoY range by year:\n")
+print(
+  flux_reddyproc %>%
+    group_by(Year) %>%
+    summarise(
+      min_DoY = min(DoY),
+      max_DoY = max(DoY),
+      n_rows = n(),
+      .groups = "drop"
+    )
+)
 
 cat("\nHour range:\n")
 print(range(flux_reddyproc$Hour, na.rm = TRUE))
 
-cat("\nDuplicated Year-DoY-Hour:\n")
+cat("\nUnique Hour values:\n")
+print(sort(unique(flux_reddyproc$Hour)))
+
+cat("\nDuplicated Year-DoY-Hour after grid merge:\n")
 print(
   sum(
     duplicated(
       flux_reddyproc %>%
-        select(
-          Year,
-          DoY,
-          Hour
-        )
+        select(Year, DoY, Hour)
     )
   )
 )
 
 cat("\nMissing values:\n")
-print(
-  colSums(
-    is.na(flux_reddyproc)
-  )
-)
+print(colSums(is.na(flux_reddyproc)))
+
+cat("\nMissing report by year:\n")
+print(missing_report)
 
 cat("\nVariable summary:\n")
-print(
-  summary(
-    flux_reddyproc
-  )
-)
+print(summary(flux_reddyproc))
 
 cat("\nUnit QC:\n")
 
-cat("Tair range should be Celsius:\n")
-print(
-  range(
-    flux_reddyproc$Tair,
-    na.rm = TRUE
-  )
-)
+cat("\nTair range should be Celsius:\n")
+print(range(flux_reddyproc$Tair, na.rm = TRUE))
 
-cat("VPD range should be hPa and <= 60:\n")
-print(
-  range(
-    flux_reddyproc$VPD,
-    na.rm = TRUE
-  )
-)
+cat("\nVPD range should be hPa and <= 60:\n")
+print(range(flux_reddyproc$VPD, na.rm = TRUE))
 
-cat("VPD > 60 count should be 0:\n")
-print(
-  sum(
-    flux_reddyproc$VPD > 60,
-    na.rm = TRUE
-  )
-)
+cat("\nVPD > 60 count should be 0:\n")
+print(sum(flux_reddyproc$VPD > 60, na.rm = TRUE))
 
-cat("Rg negative count should be 0:\n")
-print(
-  sum(
-    flux_reddyproc$Rg < 0,
-    na.rm = TRUE
-  )
-)
+cat("\nRg negative count should be 0:\n")
+print(sum(flux_reddyproc$Rg < 0, na.rm = TRUE))
 
-cat("Extreme NEE count should be 0:\n")
+cat("\nExtreme NEE count should be 0:\n")
 print(
   sum(
     flux_reddyproc$NEE < -50 |
@@ -298,15 +261,26 @@ print(
   )
 )
 
-# =========================================
-# 7. Save
-# =========================================
+cat("\nUstar negative count should be 0:\n")
+print(sum(flux_reddyproc$Ustar < 0, na.rm = TRUE))
+
+# =========================
+# 10. Save REddyProc input
+# =========================
 
 write_csv(
   flux_reddyproc,
-  output_file
+  output_file,
+  na = "NA"
 )
+
+# =========================
+# 11. Finished
+# =========================
 
 cat("\n===== 04 completed successfully =====\n")
 cat("Saved file:\n")
 cat(output_file, "\n")
+
+cat("\nMissing report saved file:\n")
+cat(missing_report_file, "\n")

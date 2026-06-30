@@ -1,6 +1,7 @@
 # ============================================================
-# 06_visualize_gapfilled_nee_2016_2025.R
-# Visualize gap-filled NEE for 2016–2025 Muka Head data
+# 06_visualize_gapfilled_nee_2016_2025_UPDATED.R
+# Visualize gap-filled NEE after updated 05 REddyProc workflow
+# Site: MukaHead
 # ============================================================
 
 library(tidyverse)
@@ -13,11 +14,13 @@ library(readr)
 
 input_file <- "/Users/caixiaoliang/Documents/reddyproc_filled_2016_2025.csv"
 
-output_daily_file <- "/Users/caixiaoliang/Documents/daily_gapfilled_NEE_2016_2025.csv"
+output_daily_file <- "/Users/caixiaoliang/Documents/06_daily_gapfilled_NEE_2016_2025.csv"
 
-fig_halfhourly_file <- "/Users/caixiaoliang/Documents/gapfilled_NEE_timeseries_2016_2025.png"
+output_yearly_qc_file <- "/Users/caixiaoliang/Documents/06_gapfilled_NEE_yearly_QC_2016_2025.csv"
 
-fig_daily_file <- "/Users/caixiaoliang/Documents/daily_gapfilled_NEE_2016_2025.png"
+fig_halfhourly_file <- "/Users/caixiaoliang/Documents/06_gapfilled_NEE_timeseries_2016_2025.png"
+
+fig_daily_file <- "/Users/caixiaoliang/Documents/06_daily_gapfilled_NEE_2016_2025.png"
 
 # =========================
 # 2. Read gap-filled dataset
@@ -26,19 +29,32 @@ fig_daily_file <- "/Users/caixiaoliang/Documents/daily_gapfilled_NEE_2016_2025.p
 filled <- read_csv(
   input_file,
   show_col_types = FALSE,
-  na = c("NA", "-9999", "-9999.0")
+  na = c("NA", "-9999", "-9999.0", "")
 )
 
 # =========================
-# 3. Check required columns
+# 3. Auto-detect gap-filled NEE column
 # =========================
+
+nee_col <- if ("NEE_U50_f" %in% names(filled)) {
+  "NEE_U50_f"
+} else if ("NEE_uStar_f" %in% names(filled)) {
+  "NEE_uStar_f"
+} else if ("NEE_f" %in% names(filled)) {
+  "NEE_f"
+} else {
+  stop("Cannot find gap-filled NEE column.")
+}
+
+cat("\nSelected gap-filled NEE column:\n")
+cat(nee_col, "\n")
 
 required_cols <- c(
   "DateTime",
   "Year",
   "DoY",
   "Hour",
-  "NEE_uStar_f"
+  nee_col
 )
 
 missing_cols <- setdiff(required_cols, names(filled))
@@ -55,13 +71,21 @@ if (length(missing_cols) > 0) {
 
 filled <- filled %>%
   mutate(
-    DateTime = ymd_hms(DateTime, tz = "Asia/Kuala_Lumpur"),
-    date_only = as.Date(DateTime),
+    DateTime = as.POSIXct(DateTime, tz = "Asia/Kuala_Lumpur"),
     Year = as.integer(Year),
-    Month = month(DateTime),
-    NEE_gapfilled = as.numeric(NEE_uStar_f)
+    DoY = as.integer(DoY),
+    Hour = as.numeric(Hour),
+    
+    date_only = as.Date(paste0(Year, "-01-01")) + days(DoY - 1),
+    Month = month(date_only),
+    
+    NEE_gapfilled = as.numeric(.data[[nee_col]])
   ) %>%
-  filter(!is.na(DateTime)) %>%
+  filter(
+    !is.na(DateTime),
+    Year >= 2016,
+    Year <= 2025
+  ) %>%
   arrange(DateTime)
 
 # =========================
@@ -74,17 +98,40 @@ print(range(filled$DateTime, na.rm = TRUE))
 cat("\n===== Number of records =====\n")
 print(nrow(filled))
 
-cat("\n===== Missing NEE_gapfilled percentage =====\n")
-print(mean(is.na(filled$NEE_gapfilled)) * 100)
-
 cat("\n===== Records by year =====\n")
 print(table(filled$Year))
+
+cat("\n===== Missing NEE_gapfilled percentage =====\n")
+print(round(mean(is.na(filled$NEE_gapfilled)) * 100, 2))
 
 cat("\n===== NEE summary =====\n")
 print(summary(filled$NEE_gapfilled))
 
 # =========================
-# 6. Half-hourly gap-filled NEE time series
+# 6. Yearly QC table
+# =========================
+
+yearly_qc <- filled %>%
+  group_by(Year) %>%
+  summarise(
+    rows = n(),
+    valid_NEE = sum(!is.na(NEE_gapfilled)),
+    missing_NEE = sum(is.na(NEE_gapfilled)),
+    valid_percent = round(valid_NEE / rows * 100, 2),
+    .groups = "drop"
+  )
+
+cat("\n===== Yearly NEE gap-filled QC =====\n")
+print(yearly_qc)
+
+write_csv(
+  yearly_qc,
+  output_yearly_qc_file,
+  na = "NA"
+)
+
+# =========================
+# 7. Half-hourly gap-filled NEE time series
 # =========================
 
 p_halfhourly <- ggplot(
@@ -110,13 +157,13 @@ ggsave(
 )
 
 # =========================
-# 7. Daily mean gap-filled NEE
+# 8. Daily mean gap-filled NEE
 # =========================
 
 nee_daily <- filled %>%
-  group_by(date_only) %>%
+  group_by(Year, DoY) %>%
   summarise(
-    Year = first(Year),
+    date_only = first(date_only),
     Month = first(Month),
     n_records = n(),
     n_valid_NEE = sum(!is.na(NEE_gapfilled)),
@@ -135,7 +182,7 @@ nee_daily <- filled %>%
   )
 
 # =========================
-# 8. Daily mean plot
+# 9. Daily mean plot
 # =========================
 
 p_daily <- ggplot(
@@ -161,7 +208,7 @@ ggsave(
 )
 
 # =========================
-# 9. Save daily dataset
+# 10. Save daily dataset
 # =========================
 
 write_csv(
@@ -171,12 +218,16 @@ write_csv(
 )
 
 # =========================
-# 10. Finished
+# 11. Finished
 # =========================
 
 cat("\n06 visualization completed successfully.\n")
+cat("Selected NEE column:\n")
+cat(nee_col, "\n")
 cat("Daily dataset saved as:\n")
 cat(output_daily_file, "\n")
+cat("Yearly QC saved as:\n")
+cat(output_yearly_qc_file, "\n")
 cat("Half-hourly figure saved as:\n")
 cat(fig_halfhourly_file, "\n")
 cat("Daily figure saved as:\n")

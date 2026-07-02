@@ -1,0 +1,424 @@
+# ============================================================
+# 10_statistical_modeling_2016_2025_UPGRADED.R
+# Daily + Monthly + Seasonal + Annual modeling
+# Site: MukaHead
+# Author: Cai Xiaoliang
+# ============================================================
+
+library(tidyverse)
+library(lubridate)
+library(readr)
+
+base_path <- "/Users/caixiaoliang/Documents"
+
+daily_file   <- file.path(base_path, "08_daily_partitioned_flux_2016_2025.csv")
+monthly_file <- file.path(base_path, "09_monthly_flux_budget_2016_2025.csv")
+annual_file  <- file.path(base_path, "09_annual_carbon_budget_2016_2025.csv")
+
+# ============================================================
+# Helper functions
+# ============================================================
+
+safe_lm <- function(formula, data) {
+  data2 <- data %>% drop_na(all.vars(formula))
+  if (nrow(data2) < 10) return(NULL)
+  lm(formula, data = data2)
+}
+
+model_summary <- function(model, scale, year, model_name, response) {
+  if (is.null(model)) return(NULL)
+  s <- summary(model)
+  tibble(
+    Scale = scale,
+    Year = year,
+    Model = model_name,
+    Response = response,
+    n = nobs(model),
+    R_squared = s$r.squared,
+    Adjusted_R_squared = s$adj.r.squared,
+    AIC = AIC(model),
+    BIC = BIC(model),
+    RMSE = sqrt(mean(residuals(model)^2, na.rm = TRUE)),
+    F_statistic = unname(s$fstatistic[1]),
+    DF_model = unname(s$fstatistic[2]),
+    DF_residual = unname(s$fstatistic[3]),
+    Model_P_value = pf(
+      unname(s$fstatistic[1]),
+      unname(s$fstatistic[2]),
+      unname(s$fstatistic[3]),
+      lower.tail = FALSE
+    )
+  )
+}
+
+standardized_beta <- function(formula, data, scale, year, model_name, response) {
+  data2 <- data %>% drop_na(all.vars(formula))
+  if (nrow(data2) < 10) return(NULL)
+
+  vars <- all.vars(formula)
+  data_std <- data2 %>%
+    mutate(across(all_of(vars), ~ as.numeric(scale(.x))))
+
+  m <- lm(formula, data = data_std)
+  coef_df <- summary(m)$coefficients %>%
+    as.data.frame() %>%
+    rownames_to_column("Term") %>%
+    filter(Term != "(Intercept)") %>%
+    transmute(
+      Scale = scale,
+      Year = year,
+      Model = model_name,
+      Response = response,
+      Term = Term,
+      Standardized_Beta = Estimate,
+      Std_Error = `Std. Error`,
+      T_value = `t value`,
+      P_value = `Pr(>|t|)`
+    )
+
+  coef_df
+}
+
+simple_vif <- function(data, predictors) {
+  out <- map_dfr(predictors, function(v) {
+    other_vars <- setdiff(predictors, v)
+
+    if (length(other_vars) == 0) {
+      return(tibble(Variable = v, VIF = NA_real_, Tolerance = NA_real_))
+    }
+
+    f <- as.formula(paste(v, "~", paste(other_vars, collapse = " + ")))
+    d <- data %>% select(all_of(c(v, other_vars))) %>% drop_na()
+
+    if (nrow(d) < 10) {
+      return(tibble(Variable = v, VIF = NA_real_, Tolerance = NA_real_))
+    }
+
+    r2 <- summary(lm(f, data = d))$r.squared
+    tibble(
+      Variable = v,
+      VIF = 1 / (1 - r2),
+      Tolerance = 1 - r2
+    )
+  })
+
+  out
+}
+
+safe_cor <- function(data, x, y) {
+  d <- data %>% select(all_of(c(x, y))) %>% drop_na()
+  if (nrow(d) < 10) {
+    return(tibble(variable_x = x, variable_y = y, pearson_r = NA_real_, p_value = NA_real_, n = nrow(d)))
+  }
+
+  test <- cor.test(d[[x]], d[[y]], method = "pearson")
+  tibble(
+    variable_x = x,
+    variable_y = y,
+    pearson_r = unname(test$estimate),
+    p_value = test$p.value,
+    n = nrow(d)
+  )
+}
+
+residual_summary <- function(model, scale, model_name) {
+  if (is.null(model)) return(NULL)
+
+  r <- residuals(model)
+
+  tibble(
+    Scale = scale,
+    Model = model_name,
+    n = length(r),
+    residual_mean = mean(r, na.rm = TRUE),
+    residual_sd = sd(r, na.rm = TRUE),
+    residual_min = min(r, na.rm = TRUE),
+    residual_max = max(r, na.rm = TRUE),
+    shapiro_p_value = ifelse(length(r) >= 3 & length(r) <= 5000, shapiro.test(r)$p.value, NA_real_)
+  )
+}
+
+plot_diagnostics <- function(model, file_prefix) {
+  if (is.null(model)) return(NULL)
+
+  d <- tibble(
+    fitted = fitted(model),
+    residual = residuals(model)
+  )
+
+  p_resid <- ggplot(d, aes(x = fitted, y = residual)) +
+    geom_point(alpha = 0.35, size = 0.8) +
+    geom_hline(yintercept = 0, linetype = "dashed") +
+    theme_minimal() +
+    labs(
+      title = paste0(file_prefix, " Residual Plot"),
+      x = "Fitted value",
+      y = "Residual"
+    )
+
+  ggsave(
+    file.path(base_path, paste0(file_prefix, "_residual_plot.png")),
+    p_resid,
+    width = 8,
+    height = 6,
+    dpi = 300
+  )
+
+  p_qq <- ggplot(d, aes(sample = residual)) +
+    stat_qq(alpha = 0.35) +
+    stat_qq_line() +
+    theme_minimal() +
+    labs(
+      title = paste0(file_prefix, " QQ Plot"),
+      x = "Theoretical quantiles",
+      y = "Sample quantiles"
+    )
+
+  ggsave(
+    file.path(base_path, paste0(file_prefix, "_qq_plot.png")),
+    p_qq,
+    width = 8,
+    height = 6,
+    dpi = 300
+  )
+}
+
+# ============================================================
+# 1. Read data
+# ============================================================
+
+daily <- read_csv(daily_file, show_col_types = FALSE, na = c("NA", "-9999", "-9999.0"))
+monthly <- read_csv(monthly_file, show_col_types = FALSE, na = c("NA", "-9999", "-9999.0"))
+annual <- read_csv(annual_file, show_col_types = FALSE, na = c("NA", "-9999", "-9999.0"))
+
+# ============================================================
+# 2. Prepare daily data
+# ============================================================
+
+daily <- daily %>%
+  mutate(
+    Year = as.integer(Year),
+    Date = as.Date(Date),
+    Month = month(Date),
+    Season = case_when(
+      Month %in% c(12, 1, 2) ~ "DJF",
+      Month %in% c(3, 4, 5) ~ "MAM",
+      Month %in% c(6, 7, 8) ~ "JJA",
+      Month %in% c(9, 10, 11) ~ "SON",
+      TRUE ~ NA_character_
+    )
+  )
+
+# ============================================================
+# 3. Daily overall models
+# ============================================================
+
+m_daily_nee_env  <- safe_lm(NEE_daily ~ Rg_daily + Tair_daily + VPD_daily, daily)
+m_daily_gpp_env  <- safe_lm(GPP_daily ~ Rg_daily + Tair_daily + VPD_daily, daily)
+m_daily_reco_env <- safe_lm(Reco_daily ~ Rg_daily + Tair_daily + VPD_daily, daily)
+
+m_daily_gpp_rg   <- safe_lm(GPP_daily ~ Rg_daily, daily)
+m_daily_gpp_vpd  <- safe_lm(GPP_daily ~ VPD_daily, daily)
+m_daily_reco_tair <- safe_lm(Reco_daily ~ Tair_daily, daily)
+m_daily_nee_rg   <- safe_lm(NEE_daily ~ Rg_daily, daily)
+
+overall_model_summary <- bind_rows(
+  model_summary(m_daily_nee_env, "Daily_overall", NA, "NEE_env", "NEE_daily"),
+  model_summary(m_daily_gpp_env, "Daily_overall", NA, "GPP_env", "GPP_daily"),
+  model_summary(m_daily_reco_env, "Daily_overall", NA, "Reco_env", "Reco_daily"),
+  model_summary(m_daily_gpp_rg, "Daily_overall", NA, "GPP_Rg", "GPP_daily"),
+  model_summary(m_daily_gpp_vpd, "Daily_overall", NA, "GPP_VPD", "GPP_daily"),
+  model_summary(m_daily_reco_tair, "Daily_overall", NA, "Reco_Tair", "Reco_daily"),
+  model_summary(m_daily_nee_rg, "Daily_overall", NA, "NEE_Rg", "NEE_daily")
+)
+
+write_csv(overall_model_summary, file.path(base_path, "10_overall_model_summary_2016_2025.csv"), na = "NA")
+
+# ============================================================
+# 4. Standardized coefficients
+# ============================================================
+
+standardized_coefficients <- bind_rows(
+  standardized_beta(NEE_daily ~ Rg_daily + Tair_daily + VPD_daily, daily, "Daily_standardized", NA, "NEE_env", "NEE_daily"),
+  standardized_beta(GPP_daily ~ Rg_daily + Tair_daily + VPD_daily, daily, "Daily_standardized", NA, "GPP_env", "GPP_daily"),
+  standardized_beta(Reco_daily ~ Rg_daily + Tair_daily + VPD_daily, daily, "Daily_standardized", NA, "Reco_env", "Reco_daily"),
+  standardized_beta(GPP_daily ~ Rg_daily, daily, "Daily_standardized", NA, "GPP_Rg", "GPP_daily"),
+  standardized_beta(GPP_daily ~ VPD_daily, daily, "Daily_standardized", NA, "GPP_VPD", "GPP_daily"),
+  standardized_beta(Reco_daily ~ Tair_daily, daily, "Daily_standardized", NA, "Reco_Tair", "Reco_daily"),
+  standardized_beta(NEE_daily ~ Rg_daily, daily, "Daily_standardized", NA, "NEE_Rg", "NEE_daily")
+)
+
+write_csv(standardized_coefficients, file.path(base_path, "10_standardized_coefficients_2016_2025.csv"), na = "NA")
+
+# ============================================================
+# 5. VIF
+# ============================================================
+
+vif_results <- simple_vif(
+  daily,
+  c("Rg_daily", "Tair_daily", "VPD_daily")
+)
+
+write_csv(vif_results, file.path(base_path, "10_vif_results_2016_2025.csv"), na = "NA")
+
+# ============================================================
+# 6. Daily residual diagnostics
+# ============================================================
+
+residual_results <- bind_rows(
+  residual_summary(m_daily_nee_env, "Daily", "NEE_env"),
+  residual_summary(m_daily_gpp_env, "Daily", "GPP_env"),
+  residual_summary(m_daily_reco_env, "Daily", "Reco_env")
+)
+
+write_csv(residual_results, file.path(base_path, "10_residual_summary_2016_2025.csv"), na = "NA")
+
+plot_diagnostics(m_daily_nee_env, "10_daily_NEE_env")
+plot_diagnostics(m_daily_gpp_env, "10_daily_GPP_env")
+plot_diagnostics(m_daily_reco_env, "10_daily_Reco_env")
+
+# ============================================================
+# 7. Monthly models
+# ============================================================
+
+monthly <- monthly %>%
+  mutate(
+    Year = as.integer(Year),
+    Month = as.integer(Month)
+  )
+
+m_monthly_nee_env  <- safe_lm(NEE_mean ~ Rg_mean + Tair_mean + VPD_mean, monthly)
+m_monthly_gpp_env  <- safe_lm(GPP_mean ~ Rg_mean + Tair_mean + VPD_mean, monthly)
+m_monthly_reco_env <- safe_lm(Reco_mean ~ Rg_mean + Tair_mean + VPD_mean, monthly)
+
+monthly_model_summary <- bind_rows(
+  model_summary(m_monthly_nee_env, "Monthly", NA, "NEE_env", "NEE_mean"),
+  model_summary(m_monthly_gpp_env, "Monthly", NA, "GPP_env", "GPP_mean"),
+  model_summary(m_monthly_reco_env, "Monthly", NA, "Reco_env", "Reco_mean")
+)
+
+write_csv(monthly_model_summary, file.path(base_path, "10_monthly_model_summary_2016_2025.csv"), na = "NA")
+
+monthly_standardized_beta <- bind_rows(
+  standardized_beta(NEE_mean ~ Rg_mean + Tair_mean + VPD_mean, monthly, "Monthly_standardized", NA, "NEE_env", "NEE_mean"),
+  standardized_beta(GPP_mean ~ Rg_mean + Tair_mean + VPD_mean, monthly, "Monthly_standardized", NA, "GPP_env", "GPP_mean"),
+  standardized_beta(Reco_mean ~ Rg_mean + Tair_mean + VPD_mean, monthly, "Monthly_standardized", NA, "Reco_env", "Reco_mean")
+)
+
+write_csv(monthly_standardized_beta, file.path(base_path, "10_monthly_standardized_beta_2016_2025.csv"), na = "NA")
+
+monthly_vif <- simple_vif(
+  monthly,
+  c("Rg_mean", "Tair_mean", "VPD_mean")
+)
+
+write_csv(monthly_vif, file.path(base_path, "10_monthly_vif_2016_2025.csv"), na = "NA")
+
+plot_diagnostics(m_monthly_nee_env, "10_monthly_NEE_env")
+plot_diagnostics(m_monthly_gpp_env, "10_monthly_GPP_env")
+plot_diagnostics(m_monthly_reco_env, "10_monthly_Reco_env")
+
+# ============================================================
+# 8. Seasonal models
+# ============================================================
+
+seasonal_model_summary <- daily %>%
+  group_by(Season) %>%
+  group_modify(~ {
+    m1 <- safe_lm(NEE_daily ~ Rg_daily + Tair_daily + VPD_daily, .x)
+    m2 <- safe_lm(GPP_daily ~ Rg_daily + Tair_daily + VPD_daily, .x)
+    m3 <- safe_lm(Reco_daily ~ Rg_daily + Tair_daily + VPD_daily, .x)
+
+    bind_rows(
+      model_summary(m1, "Seasonal", NA, paste0(.y$Season, "_NEE_env"), "NEE_daily"),
+      model_summary(m2, "Seasonal", NA, paste0(.y$Season, "_GPP_env"), "GPP_daily"),
+      model_summary(m3, "Seasonal", NA, paste0(.y$Season, "_Reco_env"), "Reco_daily")
+    )
+  }) %>%
+  ungroup()
+
+write_csv(seasonal_model_summary, file.path(base_path, "10_seasonal_model_summary_2016_2025.csv"), na = "NA")
+
+# ============================================================
+# 9. Annual simple regression models
+# ============================================================
+
+annual <- annual %>%
+  mutate(Year = as.integer(Year))
+
+m_annual_nee_vpd <- safe_lm(NEE_mean ~ VPD_mean, annual)
+m_annual_gpp_rg <- safe_lm(GPP_mean ~ Rg_mean, annual)
+m_annual_reco_tair <- safe_lm(Reco_mean ~ Tair_mean, annual)
+
+annual_model_summary <- bind_rows(
+  model_summary(m_annual_nee_vpd, "Annual", NA, "NEE_VPD", "NEE_mean"),
+  model_summary(m_annual_gpp_rg, "Annual", NA, "GPP_Rg", "GPP_mean"),
+  model_summary(m_annual_reco_tair, "Annual", NA, "Reco_Tair", "Reco_mean")
+)
+
+write_csv(annual_model_summary, file.path(base_path, "10_annual_model_summary_2016_2025.csv"), na = "NA")
+
+# ============================================================
+# 10. Correlation matrix
+# ============================================================
+
+correlation_results <- bind_rows(
+  safe_cor(daily, "NEE_daily", "VPD_daily"),
+  safe_cor(daily, "NEE_daily", "Tair_daily"),
+  safe_cor(daily, "NEE_daily", "Rg_daily"),
+  safe_cor(daily, "GPP_daily", "Rg_daily"),
+  safe_cor(daily, "GPP_daily", "VPD_daily"),
+  safe_cor(daily, "Reco_daily", "Tair_daily")
+)
+
+write_csv(correlation_results, file.path(base_path, "10_correlation_results_2016_2025.csv"), na = "NA")
+
+# ============================================================
+# 11. Variable importance based on standardized beta
+# ============================================================
+
+variable_importance <- standardized_coefficients %>%
+  filter(Model %in% c("NEE_env", "GPP_env", "Reco_env")) %>%
+  group_by(Model, Response) %>%
+  mutate(
+    Abs_Beta = abs(Standardized_Beta),
+    Importance_percent = round(Abs_Beta / sum(Abs_Beta, na.rm = TRUE) * 100, 2),
+    Rank = rank(-Abs_Beta, ties.method = "first")
+  ) %>%
+  arrange(Model, Rank) %>%
+  ungroup()
+
+write_csv(variable_importance, file.path(base_path, "10_variable_importance_2016_2025.csv"), na = "NA")
+
+# ============================================================
+# 12. Model comparison
+# ============================================================
+
+model_comparison <- bind_rows(
+  overall_model_summary,
+  monthly_model_summary,
+  seasonal_model_summary,
+  annual_model_summary
+) %>%
+  select(
+    Scale,
+    Model,
+    Response,
+    n,
+    R_squared,
+    Adjusted_R_squared,
+    RMSE,
+    AIC,
+    BIC,
+    Model_P_value
+  )
+
+write_csv(model_comparison, file.path(base_path, "10_model_comparison_2016_2025.csv"), na = "NA")
+
+# ============================================================
+# 13. Finished
+# ============================================================
+
+cat("\n10 upgraded statistical modeling completed successfully.\n")
+cat("All output files saved in:\n")
+cat(base_path, "\n")

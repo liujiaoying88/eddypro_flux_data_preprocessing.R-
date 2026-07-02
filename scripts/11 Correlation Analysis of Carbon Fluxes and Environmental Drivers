@@ -1,0 +1,342 @@
+# =========================================
+# 11 Correlation Analysis of Carbon Fluxes and Environmental Drivers
+# Site: MukaHead
+# Author: Cai Xiaoliang
+# Period: 2016–2025
+# =========================================
+
+library(tidyverse)
+library(lubridate)
+library(readr)
+
+# =========================================
+# 0. File paths
+# =========================================
+
+base_path <- "/Users/caixiaoliang/Documents"
+
+daily_file <- file.path(
+  base_path,
+  "08_daily_partitioned_flux_2016_2025.csv"
+)
+
+monthly_file <- file.path(
+  base_path,
+  "09_monthly_flux_budget_2016_2025.csv"
+)
+
+# Output files
+daily_pearson_file <- file.path(base_path, "11_daily_pearson_correlation_2016_2025.csv")
+daily_spearman_file <- file.path(base_path, "11_daily_spearman_correlation_2016_2025.csv")
+monthly_pearson_file <- file.path(base_path, "11_monthly_pearson_correlation_2016_2025.csv")
+monthly_spearman_file <- file.path(base_path, "11_monthly_spearman_correlation_2016_2025.csv")
+
+daily_flux_env_file <- file.path(base_path, "11_daily_flux_environment_correlation_2016_2025.csv")
+monthly_flux_env_file <- file.path(base_path, "11_monthly_flux_environment_correlation_2016_2025.csv")
+
+# =========================================
+# 1. Helper functions
+# =========================================
+
+cor_to_long <- function(cor_matrix) {
+  as.data.frame(cor_matrix) %>%
+    rownames_to_column(var = "Variable_1") %>%
+    pivot_longer(
+      cols = -Variable_1,
+      names_to = "Variable_2",
+      values_to = "Correlation"
+    )
+}
+
+plot_correlation_heatmap <- function(cor_long, title_text) {
+  ggplot(
+    cor_long,
+    aes(
+      x = Variable_1,
+      y = Variable_2,
+      fill = Correlation
+    )
+  ) +
+    geom_tile(color = "white") +
+    geom_text(
+      aes(label = round(Correlation, 2)),
+      size = 4
+    ) +
+    scale_fill_gradient2(
+      low = "blue",
+      mid = "white",
+      high = "red",
+      midpoint = 0,
+      limits = c(-1, 1)
+    ) +
+    theme_minimal() +
+    theme(
+      axis.text.x = element_text(angle = 45, hjust = 1),
+      axis.text.y = element_text(size = 10)
+    ) +
+    labs(
+      title = title_text,
+      x = "",
+      y = "",
+      fill = "r"
+    )
+}
+
+safe_cor_matrix <- function(data, method_name) {
+  data_clean <- data %>%
+    select(where(is.numeric))
+
+  cor(
+    data_clean,
+    use = "pairwise.complete.obs",
+    method = method_name
+  )
+}
+
+# =========================================
+# 2. Read daily data
+# =========================================
+
+daily_flux <- read_csv(
+  daily_file,
+  show_col_types = FALSE,
+  na = c("NA", "-9999", "-9999.0")
+)
+
+required_daily_cols <- c(
+  "NEE_daily",
+  "GPP_daily",
+  "Reco_daily",
+  "Rg_daily",
+  "Tair_daily",
+  "VPD_daily"
+)
+
+missing_daily_cols <- setdiff(required_daily_cols, names(daily_flux))
+
+if (length(missing_daily_cols) > 0) {
+  cat("\nMissing daily columns:\n")
+  print(missing_daily_cols)
+  stop("Required daily columns are missing.")
+}
+
+daily_cor_data <- daily_flux %>%
+  select(all_of(required_daily_cols)) %>%
+  mutate(across(everything(), as.numeric))
+
+# =========================================
+# 3. Daily correlations
+# =========================================
+
+daily_pearson <- safe_cor_matrix(daily_cor_data, "pearson")
+daily_spearman <- safe_cor_matrix(daily_cor_data, "spearman")
+
+daily_pearson_long <- cor_to_long(daily_pearson)
+daily_spearman_long <- cor_to_long(daily_spearman)
+
+write_csv(daily_pearson_long, daily_pearson_file, na = "NA")
+write_csv(daily_spearman_long, daily_spearman_file, na = "NA")
+
+cat("\n===== Daily Pearson correlation =====\n")
+print(daily_pearson)
+
+cat("\n===== Daily Spearman correlation =====\n")
+print(daily_spearman)
+
+# =========================================
+# 4. Daily heatmaps
+# =========================================
+
+p_daily_pearson <- plot_correlation_heatmap(
+  daily_pearson_long,
+  "Daily Pearson Correlation Matrix (2016–2025)"
+)
+
+print(p_daily_pearson)
+
+ggsave(
+  file.path(base_path, "11_daily_pearson_correlation_heatmap_2016_2025.png"),
+  p_daily_pearson,
+  width = 10,
+  height = 8,
+  dpi = 600
+)
+
+p_daily_spearman <- plot_correlation_heatmap(
+  daily_spearman_long,
+  "Daily Spearman Correlation Matrix (2016–2025)"
+)
+
+print(p_daily_spearman)
+
+ggsave(
+  file.path(base_path, "11_daily_spearman_correlation_heatmap_2016_2025.png"),
+  p_daily_spearman,
+  width = 10,
+  height = 8,
+  dpi = 600
+)
+
+# =========================================
+# 5. Read monthly data
+# =========================================
+
+monthly_flux <- read_csv(
+  monthly_file,
+  show_col_types = FALSE,
+  na = c("NA", "-9999", "-9999.0")
+)
+
+required_monthly_cols <- c(
+  "NEE_mean",
+  "GPP_mean",
+  "Reco_mean",
+  "Rg_mean",
+  "Tair_mean",
+  "VPD_mean"
+)
+
+missing_monthly_cols <- setdiff(required_monthly_cols, names(monthly_flux))
+
+if (length(missing_monthly_cols) > 0) {
+  cat("\nMissing monthly columns:\n")
+  print(missing_monthly_cols)
+  stop("Required monthly columns are missing.")
+}
+
+monthly_cor_data <- monthly_flux %>%
+  select(all_of(required_monthly_cols)) %>%
+  mutate(across(everything(), as.numeric))
+
+# =========================================
+# 6. Monthly correlations
+# =========================================
+
+monthly_pearson <- safe_cor_matrix(monthly_cor_data, "pearson")
+monthly_spearman <- safe_cor_matrix(monthly_cor_data, "spearman")
+
+monthly_pearson_long <- cor_to_long(monthly_pearson)
+monthly_spearman_long <- cor_to_long(monthly_spearman)
+
+write_csv(monthly_pearson_long, monthly_pearson_file, na = "NA")
+write_csv(monthly_spearman_long, monthly_spearman_file, na = "NA")
+
+cat("\n===== Monthly Pearson correlation =====\n")
+print(monthly_pearson)
+
+cat("\n===== Monthly Spearman correlation =====\n")
+print(monthly_spearman)
+
+# =========================================
+# 7. Monthly heatmaps
+# =========================================
+
+p_monthly_pearson <- plot_correlation_heatmap(
+  monthly_pearson_long,
+  "Monthly Pearson Correlation Matrix (2016–2025)"
+)
+
+print(p_monthly_pearson)
+
+ggsave(
+  file.path(base_path, "11_monthly_pearson_correlation_heatmap_2016_2025.png"),
+  p_monthly_pearson,
+  width = 10,
+  height = 8,
+  dpi = 600
+)
+
+p_monthly_spearman <- plot_correlation_heatmap(
+  monthly_spearman_long,
+  "Monthly Spearman Correlation Matrix (2016–2025)"
+)
+
+print(p_monthly_spearman)
+
+ggsave(
+  file.path(base_path, "11_monthly_spearman_correlation_heatmap_2016_2025.png"),
+  p_monthly_spearman,
+  width = 10,
+  height = 8,
+  dpi = 600
+)
+
+# =========================================
+# 8. Extract flux-environment correlations
+# =========================================
+
+daily_flux_env_cor <- daily_pearson_long %>%
+  filter(
+    Variable_1 %in% c("NEE_daily", "GPP_daily", "Reco_daily"),
+    Variable_2 %in% c("Rg_daily", "Tair_daily", "VPD_daily")
+  ) %>%
+  arrange(Variable_1, desc(abs(Correlation)))
+
+monthly_flux_env_cor <- monthly_pearson_long %>%
+  filter(
+    Variable_1 %in% c("NEE_mean", "GPP_mean", "Reco_mean"),
+    Variable_2 %in% c("Rg_mean", "Tair_mean", "VPD_mean")
+  ) %>%
+  arrange(Variable_1, desc(abs(Correlation)))
+
+write_csv(daily_flux_env_cor, daily_flux_env_file, na = "NA")
+write_csv(monthly_flux_env_cor, monthly_flux_env_file, na = "NA")
+
+cat("\n===== Daily flux-environment Pearson correlations =====\n")
+print(daily_flux_env_cor)
+
+cat("\n===== Monthly flux-environment Pearson correlations =====\n")
+print(monthly_flux_env_cor)
+
+# =========================================
+# 9. Yearly daily correlation
+# =========================================
+
+daily_yearly_cor <- daily_flux %>%
+  group_by(Year) %>%
+  group_modify(~ {
+    d <- .x %>%
+      select(all_of(required_daily_cols)) %>%
+      mutate(across(everything(), as.numeric))
+
+    if (nrow(drop_na(d)) < 10) {
+      return(tibble())
+    }
+
+    cor_long <- cor_to_long(
+      cor(d, use = "pairwise.complete.obs", method = "pearson")
+    )
+
+    cor_long
+  }) %>%
+  ungroup()
+
+write_csv(
+  daily_yearly_cor,
+  file.path(base_path, "11_daily_yearly_pearson_correlation_2016_2025.csv"),
+  na = "NA"
+)
+
+# =========================================
+# 10. Finished
+# =========================================
+
+saved_files <- c(
+  daily_pearson_file,
+  daily_spearman_file,
+  monthly_pearson_file,
+  monthly_spearman_file,
+  daily_flux_env_file,
+  monthly_flux_env_file,
+  file.path(base_path, "11_daily_pearson_correlation_heatmap_2016_2025.png"),
+  file.path(base_path, "11_daily_spearman_correlation_heatmap_2016_2025.png"),
+  file.path(base_path, "11_monthly_pearson_correlation_heatmap_2016_2025.png"),
+  file.path(base_path, "11_monthly_spearman_correlation_heatmap_2016_2025.png"),
+  file.path(base_path, "11_daily_yearly_pearson_correlation_2016_2025.csv")
+)
+
+cat("\n=========================================\n")
+cat("11 correlation analysis completed successfully.\n")
+cat("=========================================\n")
+cat("Saved files:\n")
+print(saved_files)
